@@ -119,6 +119,37 @@ func (m *Module) deferCheck(c func() *Error) {
 	}
 }
 
+// validSymbol is the rule for a name the linker will see, which is
+// wider than the rule for a name only this IR will see: a symbol may
+// also contain "$".
+//
+// The character is there for the frontends. Swift's mangling begins
+// "$s" and every symbol it produces carries one, and every object
+// format this IR targets -- ELF, Mach-O and COFF -- takes "$" in a
+// symbol without complaint. Refusing it here would mean a frontend
+// with a mangling scheme of its own could not name its own functions,
+// which is not a decision an IR should be making for it.
+//
+// It stays out of validIdent, because a block label or a type name is
+// this module's own business and gains nothing from it.
+func validSymbol(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '_' || c == '$':
+		case c >= 'a' && c <= 'z':
+		case c >= 'A' && c <= 'Z':
+		case c >= '0' && c <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func validIdent(s string) bool {
 	if s == "" {
 		return false

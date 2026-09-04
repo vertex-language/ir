@@ -30,6 +30,7 @@ letter       ::= "A".."Z" | "a".."z"
 digit        ::= "0".."9"
 hexdigit     ::= digit | "a".."f" | "A".."F"
 ident        ::= ( letter | "_" ) ( letter | digit | "_" )*
+symname      ::= ( letter | "_" | "$" ) ( letter | digit | "_" | "$" )*
 name         ::= ident
 decimal      ::= digit+
 unsigned     ::= decimal | "0x" hexdigit+
@@ -42,7 +43,7 @@ float        ::= "-"? decimal "." decimal* exponent?
                | "-"? "inf"
                | "-"? "nan" ( ":" "0x" hexdigit+ )?
 register     ::= "%" ( ident | decimal )
-symbol       ::= "@" ident
+symbol       ::= "@" symname
 metaname     ::= "!" ident
 ellipsis     ::= "..."
 string       ::= '"' schar* '"'

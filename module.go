@@ -321,7 +321,7 @@ func (m *Module) Err() error {
 
 // declare records a symbol in the module-scope value namespace.
 func (m *Module) declare(name string, s Symbol) bool {
-	if !validIdent(name) {
+	if !validSymbol(name) {
 		m.failModule(ErrName, "symbol name %q", name)
 		return false
 	}
