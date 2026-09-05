@@ -203,6 +203,25 @@ func lowerGlobal(t Target, g *ir.Global) error {
 // the domain, which is why it is decided here and not by a Domain method.
 func sectionFor(g *ir.Global) Kind {
 	if g.Domain() == ir.RO {
+		// Read-only, but only once something has written it: an
+		// initializer naming another symbol is a relocation, and a
+		// relocation has to be applied. .rodata is mapped read-only
+		// from the file and __TEXT,__const is inside the text
+		// segment, so a table of pointers placed there either faults
+		// when the loader rebases it or is silently left holding
+		// whatever was in the file. A vtable is exactly this shape,
+		// and clang puts one in __DATA,__const for the same reason.
+		//
+		// Data rather than a section of its own. The right answer is
+		// relro -- .data.rel.ro on ELF, __DATA_CONST on Mach-O --
+		// which is written once by the loader and then made read-only
+		// again; expressing that is a Kind here, a section in each
+		// assembler and a mapping in each container writer, and none
+		// of those exist. Data is correct and less protected, which
+		// is the trade being made until they do.
+		if hasReloc(g.Initializer()) {
+			return Data
+		}
 		return ROData
 	}
 	// A thread-local's bytes are the template every thread's copy is made
@@ -606,4 +625,26 @@ func addend(l Layout, r ir.Reloc) (int64, error) {
 		return 0, nil
 	}
 	return ConstInt(l, r.Addend)
+}
+
+// hasReloc reports whether an initializer names a symbol anywhere in
+// it, which is what makes its bytes something a loader has to write.
+func hasReloc(i ir.Init) bool {
+	switch i.Kind() {
+	case ir.InitRelocKind:
+		return true
+	case ir.InitList:
+		for _, e := range i.Elems() {
+			if hasReloc(e) {
+				return true
+			}
+		}
+	case ir.InitFields:
+		for _, f := range i.FieldVals() {
+			if hasReloc(f.Init) {
+				return true
+			}
+		}
+	}
+	return false
 }
