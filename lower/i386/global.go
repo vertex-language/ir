@@ -26,6 +26,8 @@ func (t globalTarget) Section(k globals.Kind) globals.Section {
 	switch k {
 	case globals.ROData:
 		kind = i386asm.ROData
+	case globals.RelROData:
+		kind = i386asm.RelROData
 	case globals.BSS:
 		kind = i386asm.BSS
 	default:

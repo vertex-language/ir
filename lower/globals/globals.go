@@ -37,6 +37,13 @@ const (
 	ROData Kind = iota
 	Data
 	BSS
+
+	// RelROData is read-only data whose bytes a loader has to write
+	// before they are what they say: a table of addresses of other
+	// symbols. .rodata cannot hold one, being mapped read-only from
+	// the file, and .data would leave a table of function pointers
+	// writable for the life of the process. See sectionFor.
+	RelROData
 )
 
 // A Layout is what one architecture says about the shape of a type. It is
@@ -212,15 +219,13 @@ func sectionFor(g *ir.Global) Kind {
 		// whatever was in the file. A vtable is exactly this shape,
 		// and clang puts one in __DATA,__const for the same reason.
 		//
-		// Data rather than a section of its own. The right answer is
-		// relro -- .data.rel.ro on ELF, __DATA_CONST on Mach-O --
-		// which is written once by the loader and then made read-only
-		// again; expressing that is a Kind here, a section in each
-		// assembler and a mapping in each container writer, and none
-		// of those exist. Data is correct and less protected, which
-		// is the trade being made until they do.
+		// relro, not .data: once the loader has applied the
+		// relocation the bytes are constant, and a table of function
+		// pointers left writable for the life of the process is a
+		// table an attacker can edit. Each container spells that its
+		// own way and the assemblers carry the kind across.
 		if hasReloc(g.Initializer()) {
-			return Data
+			return RelROData
 		}
 		return ROData
 	}
