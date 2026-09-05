@@ -183,9 +183,37 @@ func lowerFunc(am *i386asm.Module, text *i386asm.Section, fn *ir.Func, opts Opti
 		mblocks[i+1] = mf.NewBlock(blockLabel(fn, blk))
 	}
 
+	// Selection order is not emission order. An instruction's result
+	// gets its vreg where the instruction is selected, so a block
+	// using a value has to come after the block defining it — which
+	// is reverse postorder, and not necessarily the order the blocks
+	// were built in. See the same comment in lower/arm64. The mir
+	// blocks stay indexed by the function's own order, so what is
+	// emitted is unchanged.
+	at := make(map[*ir.Block]int, len(blocks))
 	for i, blk := range blocks {
+		at[blk] = i
+	}
+	done := make([]bool, len(blocks))
+	sel := func(blk *ir.Block) error {
+		i, ok := at[blk]
+		if !ok || done[i] {
+			return nil
+		}
+		done[i] = true
 		if err := iselBlock(fn, mf, vr, fr, blk, mblocks[i], opts); err != nil {
 			return fmt.Errorf("lower: %s: %w", fn.Name(), err)
+		}
+		return nil
+	}
+	for _, blk := range fn.RPO() {
+		if err := sel(blk); err != nil {
+			return err
+		}
+	}
+	for _, blk := range blocks {
+		if err := sel(blk); err != nil {
+			return err
 		}
 	}
 

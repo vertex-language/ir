@@ -227,9 +227,44 @@ func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Op
 		mblocks[i+1] = mf.NewBlock(blockLabel(fn, blk))
 	}
 
+	// Selection order is not emission order.
+	//
+	// An instruction's result gets its vreg where the instruction is
+	// selected, so a block that uses a value has to be selected after
+	// the block that defines it. Dominance guarantees such an order
+	// exists and reverse postorder is one, but the order the blocks
+	// were built in is not: a frontend that splits a block partway
+	// through lowering appends the halves after blocks that already
+	// branch to them, and the list stops matching the graph.
+	//
+	// The mir blocks stay indexed by the function's own order, so
+	// what is emitted is exactly what it was before.
+	at := make(map[*ir.Block]int, len(blocks))
 	for i, blk := range blocks {
+		at[blk] = i
+	}
+	done := make([]bool, len(blocks))
+	sel := func(blk *ir.Block) error {
+		i, ok := at[blk]
+		if !ok || done[i] {
+			return nil
+		}
+		done[i] = true
 		if err := iselBlock(fn, mf, vr, fr, blk, mblocks[i], opts); err != nil {
 			return fmt.Errorf("lower: %s: %w", fn.Name(), err)
+		}
+		return nil
+	}
+	for _, blk := range fn.RPO() {
+		if err := sel(blk); err != nil {
+			return err
+		}
+	}
+	// Anything RPO did not reach is unreachable, and is still emitted
+	// — an empty mir block would leave a label with no body behind it.
+	for _, blk := range blocks {
+		if err := sel(blk); err != nil {
+			return err
 		}
 	}
 

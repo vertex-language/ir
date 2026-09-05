@@ -467,10 +467,38 @@ func lowerFunc(am *amd64asm.Module, text *amd64asm.Section, fn *ir.Func, opts Op
 		return err
 	}
 
+	// Selection order is not emission order. An instruction's result
+	// gets its vreg where the instruction is selected, so a block
+	// using a value has to come after the block defining it — which
+	// is reverse postorder, and not necessarily the order the blocks
+	// were built in. See the same comment in lower/arm64. The mir
+	// blocks stay indexed by the function's own order, so what is
+	// emitted is unchanged.
 	uses := indexUses(fn)
+	at := make(map[*ir.Block]int, len(blocks))
 	for i, blk := range blocks {
+		at[blk] = i
+	}
+	done := make([]bool, len(blocks))
+	sel := func(blk *ir.Block) error {
+		i, ok := at[blk]
+		if !ok || done[i] {
+			return nil
+		}
+		done[i] = true
 		if err := iselBlock(fn, mf, newCursor(fn, mf, mbs[i], opts.LibcallPrefix), vr, fr, blk, uses); err != nil {
 			return fmt.Errorf("lower: %s: %w", fn.Name(), err)
+		}
+		return nil
+	}
+	for _, blk := range fn.RPO() {
+		if err := sel(blk); err != nil {
+			return err
+		}
+	}
+	for _, blk := range blocks {
+		if err := sel(blk); err != nil {
+			return err
 		}
 	}
 
