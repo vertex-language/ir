@@ -115,6 +115,8 @@ func iselInst(c *cursor, vr *vregs, fr *frame, in *ir.Inst, opts Options) error 
 		return iselStackSave(c, vr, in)
 	case ir.VStackRestore:
 		return iselStackRestore(c, vr, in)
+	case ir.VTLSAddr:
+		return iselTLSAddr(c, vr, in)
 	case ir.VGetAddr:
 		return iselGetAddr(c, vr, in)
 	case ir.VBlockAddr:
@@ -436,6 +438,50 @@ func iselAlloc(c *cursor, vr *vregs, fr *frame, in *ir.Inst, opts Options) error
 	c.Emit(mir.Instr{Op: constOp{imm: 0, w: w32}, Defs: []mir.VReg{zero}})
 	c.Emit(mir.Instr{Op: constOp{imm: int64(size), w: w64}, Defs: []mir.VReg{n}})
 	return emitLibcall(c, vr, memsetSym, opts, []mir.VReg{dst, zero, n})
+}
+
+// iselTLSAddr lowers §D3's tlsaddr under Mach-O's model.
+//
+// The sequence calls a thunk the loader owns, so it clobbers what any
+// call clobbers — X30 included, which is why a function containing one
+// needs a frame. What it does not do is go through emitCallSeq: there
+// is no signature, no argument classification and no result
+// convention to apply, only one register the model names.
+func iselTLSAddr(c *cursor, vr *vregs, in *ir.Inst) error {
+	sym := in.Symbol()
+	if sym == nil {
+		return fmt.Errorf("%s: no symbol named", in.Op())
+	}
+	dst, err := vr.define(in.Result(0))
+	if err != nil {
+		return fmt.Errorf("%s: %w", in.Op(), err)
+	}
+
+	site := newCallSite(vr)
+	x0 := site.intReg(reg.X0, w64)
+
+	// Every caller-saved register is a destination whether the sequence
+	// names it or not: it makes a call, and a value live across it
+	// cannot be in one. The scratch the thunk pointer goes through is
+	// among them, so it needs no vreg of its own.
+	defs := []mir.VReg{x0}
+	for _, r := range callerSaved {
+		if site.namedInt(r) {
+			continue
+		}
+		defs = append(defs, site.intReg(r, w64))
+	}
+	defs = append(defs, site.intReg(reg.X30, w64))
+	for _, r := range callerSavedVec {
+		if site.namedVec(r) {
+			continue
+		}
+		defs = append(defs, site.vecReg(r, wf64))
+	}
+	c.Emit(mir.Instr{Op: tlvAddrOp{sym: sym.Name()}, Defs: defs})
+
+	emitCopy(c, dst, x0, w64)
+	return nil
 }
 
 func iselGetAddr(c *cursor, vr *vregs, in *ir.Inst) error {

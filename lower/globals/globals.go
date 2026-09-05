@@ -67,10 +67,37 @@ type Target interface {
 	// the sequence that finds it are one feature: a target that emits the
 	// bytes and cannot lower ptr.tlsaddr has produced a global no
 	// instruction can address, which is worse than not compiling.
-	TLSSection() Section
+	//
+	// The kind is Data or BSS, decided the same way it is for an ordinary
+	// global. A target with one thread-local section ignores it; Mach-O
+	// has two, __thread_data and __thread_bss, and a zeroed template
+	// belongs in the second for the same reason .bss exists.
+	TLSSection(Kind) Section
 
 	// PtrBytes is how many bytes an address initializer fills.
 	PtrBytes() uint64
+}
+
+// A TLSDescriptors target needs something beside a thread-local's
+// template, under the name the program uses.
+//
+// Mach-O is why it exists. A thread-local there is two symbols: the
+// template, which no instruction names, and a three-word descriptor,
+// which every access goes through. One section and one symbol cannot
+// say that, and the shape is the container's rather than the walk's —
+// so the walk asks, and a target that answers nothing gets the single
+// symbol it wanted.
+type TLSDescriptors interface {
+	// TLSTemplateName is what to call the template, given the name the
+	// program declared. It is a second symbol, so it needs a second
+	// name; Mach-O's convention is the declared name with $tlv$init
+	// after it.
+	TLSTemplateName(name string) string
+
+	// TLSDescriptor writes what stands beside the template, under the
+	// declared name. template is what TLSTemplateName returned, already
+	// emitted.
+	TLSDescriptor(g *ir.Global, template string) error
 }
 
 // A Section is the part of an assembler's section builder this walk uses.
@@ -109,7 +136,7 @@ func Lower(t Target, m *ir.Module) error {
 
 func lowerGlobal(t Target, g *ir.Global) error {
 	tls := g.Domain() == ir.TLS
-	if tls && t.TLSSection() == nil {
+	if tls && t.TLSSection(sectionFor(g)) == nil {
 		// A thread-local is not a section and an offset; it is an entry
 		// in a TLS block, reached through a model with its own
 		// relocations and its own sequence at the use site. That is
@@ -125,13 +152,21 @@ func lowerGlobal(t Target, g *ir.Global) error {
 		return fmt.Errorf("lower: @%s asks for section %q; only the domain's own section is emitted yet", g.Name(), g.SectionAttr())
 	}
 
+	// The name the bytes are emitted under, and how visible it is.
+	// Both change for a thread-local on a target that wants a
+	// descriptor: the template becomes a second, local symbol, and the
+	// declared name goes to the descriptor the program actually reaches.
+	name, binding := g.Name(), bindingFor(g)
+	var desc TLSDescriptors
+
 	sec := t.Section(sectionFor(g))
 	if tls {
-		// One section for both, initialized or not. A thread-local's
-		// bytes are the template every thread's copy is made from, so a
-		// zeroed one still occupies the template rather than costing
-		// address space alone the way .bss does.
-		sec = t.TLSSection()
+		sec = t.TLSSection(sectionFor(g))
+		if d, ok := t.(TLSDescriptors); ok {
+			desc = d
+			name = d.TLSTemplateName(g.Name())
+			binding = Local
+		}
 	}
 
 	// Alignment before the label: it is a property of the address the
@@ -146,12 +181,16 @@ func lowerGlobal(t Target, g *ir.Global) error {
 		natural = a
 	}
 	sec.Align(int(natural))
-	sec.Object(g.Name(), bindingFor(g))
+	sec.Object(name, binding)
 
 	if err := emitInit(t, sec, g, g.Type(), g.Initializer()); err != nil {
 		return err
 	}
-	sec.Close(g.Name())
+	sec.Close(name)
+
+	if desc != nil {
+		return desc.TLSDescriptor(g, name)
+	}
 	return nil
 }
 
@@ -166,6 +205,11 @@ func sectionFor(g *ir.Global) Kind {
 	if g.Domain() == ir.RO {
 		return ROData
 	}
+	// A thread-local's bytes are the template every thread's copy is made
+	// from, and the split is the same one an ordinary global gets: all
+	// zeroes costs address space alone, anything else costs file bytes.
+	// Which two sections those are is TLSSection's answer.
+
 	if k := g.Initializer().Kind(); k == ir.InitZeroed || k == 0 {
 		return BSS
 	}

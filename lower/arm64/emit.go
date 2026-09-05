@@ -346,6 +346,17 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 				text.AddImm64(x(in.Defs[0]), x(in.Defs[0]),
 					arm64asm.PageOff(arm64asm.Ref(op.sym, arm64asm.RefAddAbsLo12)))
 
+			case tlvAddrOp:
+				// The descriptor's address, then the thunk out of it,
+				// then the call. X1 is scratch and is declared a
+				// destination of this instruction, so nothing the
+				// allocator placed there is alive here.
+				text.Adrp(reg.X0, arm64asm.Ref(op.sym, arm64asm.RefAdrTlvPage21))
+				text.LdrImm64(reg.X0, arm64asm.Mem64(reg.X0).
+					Off(arm64asm.TlvPageOff(arm64asm.Ref(op.sym, arm64asm.RefLdTlvLo12))))
+				text.LdrImm64(reg.X1, arm64asm.Mem64(reg.X0))
+				text.Blr(reg.X1)
+
 			case symGotAddrOp:
 				// ADRP and LDR: the GOT slot's page, then the pointer in it.
 				text.Adrp(x(in.Defs[0]), arm64asm.Ref(op.sym, arm64asm.RefAdrGotPage21))

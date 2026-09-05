@@ -152,7 +152,7 @@ func Lower(m *ir.Module, opts Options) (*arm64obj.Object, error) {
 		am.Extern(s)
 	}
 
-	if err := lowerGlobals(am, m); err != nil {
+	if err := lowerGlobals(am, m, opts); err != nil {
 		return nil, err
 	}
 

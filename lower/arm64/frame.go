@@ -127,6 +127,12 @@ func planFrame(fn *ir.Func, opts Options) (*frame, error) {
 	for _, blk := range fn.Blocks() {
 		for _, in := range blk.Insts() {
 			switch in.Op().Verb {
+			case ir.VTLSAddr:
+				// The thread-local sequence calls a thunk, so it needs
+				// the frame record saved for the same reason a call
+				// does: X30 does not survive it.
+				fr.force = true
+				continue
 			case ir.VCall, ir.VCallInd:
 				// A call needs the frame record saved, because it will
 				// overwrite X30 with its own return address.

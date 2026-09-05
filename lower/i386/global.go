@@ -106,4 +106,4 @@ func funcBinding(fn *ir.Func) i386asm.Binding {
 // TLSSection is nil: this target has no TLS model yet, so globals.Lower
 // refuses a thread-local rather than emitting storage nothing can reach.
 // See lower.go's list of what §D3 is still missing here.
-func (t globalTarget) TLSSection() globals.Section { return nil }
+func (t globalTarget) TLSSection(globals.Kind) globals.Section { return nil }

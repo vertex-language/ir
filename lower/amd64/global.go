@@ -107,12 +107,16 @@ const peTLSSection = ".tls$"
 // TLSSection is the thread-local template, under the one model this backend
 // implements: PE's static TLS.
 //
+// The kind is ignored. PE has one template section and the loader copies
+// all of it, so a zeroed thread-local occupies it like any other rather
+// than costing address space alone.
+//
 // It is the ABI that decides, not the container, because the container is
 // chosen after lowering and the sequence at the use site has to match the
 // storage. ELF's four models and Mach-O's are a different question with
 // different relocations, so a module that is not Microsoft's gets nil and
 // globals.Lower refuses the declaration.
-func (t globalTarget) TLSSection() globals.Section {
+func (t globalTarget) TLSSection(globals.Kind) globals.Section {
 	if t.tlsModel != tlsPE {
 		return nil
 	}

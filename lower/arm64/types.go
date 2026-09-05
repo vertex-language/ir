@@ -281,6 +281,21 @@ type (
 	// instruction is four bytes wide.
 	symAddrOp struct{ sym string }
 
+	// tlvAddrOp is a thread-local's address in the calling thread: the
+	// four instructions Mach-O's model asks for, as one mir instruction
+	// because they are one indivisible sequence with a fixed register.
+	//
+	//	adrp x0, sym@TLVPPAGE
+	//	ldr  x0, [x0, sym@TLVPPAGEOFF]   the descriptor
+	//	ldr  x1, [x0]                    its thunk
+	//	blr  x1                          returns the address in x0
+	//
+	// x0 is not a choice. The thunk's contract is that it takes the
+	// descriptor there and hands the address back there, which is why
+	// this cannot be built out of the ordinary address and call pieces:
+	// they would let the allocator pick.
+	tlvAddrOp struct{ sym string }
+
 	// symGotAddrOp is ADRP plus LDR: a symbol's address read out of the
 	// GOT, for a symbol whose address this link does not know.
 	symGotAddrOp struct{ sym string }
