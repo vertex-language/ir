@@ -69,7 +69,15 @@ type Target struct {
 // NewTarget pairs a use path with a layout.
 func NewTarget(use string, l Layout) Target { return Target{use: use, layout: l.clone()} }
 
-func (t Target) Use() string    { return t.use }
+func (t Target) Use() string { return t.use }
+
+// Valid reports whether the target names a machine.
+//
+// The zero Target does not: it has no use path and an empty layout,
+// and lowering against it produces an object for no architecture at
+// all -- which fails somewhere far from the caller who forgot to name
+// one. Asking here is cheaper than reading that.
+func (t Target) Valid() bool    { return t.use != "" }
 func (t Target) Layout() Layout { return t.layout.clone() }
 func (t Target) String() string { return t.use }
 
