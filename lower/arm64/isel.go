@@ -598,8 +598,8 @@ func iselCallInd(c *cursor, vr *vregs, in *ir.Inst, opts Options) error {
 func iselCallSeq(c *cursor, vr *vregs, what string, sig *ir.Sig,
 	args []*ir.Def, results []*ir.Def, extraUses []mir.VReg, op any, opts Options) error {
 
-	if len(results) > 2 {
-		return fmt.Errorf("%s: %d results; more than two comes back through memory, which is sret and is not written yet", what, len(results))
+	if err := checkResultRegs(vr, what, results); err != nil {
+		return err
 	}
 
 	named := len(args)

@@ -115,15 +115,22 @@ func iselBlock(fn *ir.Func, mf *mir.Func, vr *vregs, fr *frame, blk *ir.Block, m
 	return fmt.Errorf("%s is not a terminator this package lowers", term.Op())
 }
 
-// iselReturn lowers a return of the values AAPCS64 brings back in registers.
+// iselReturn lowers a return of the values brought back in registers.
 //
-// The same eight registers arguments arrive in, and the first two of each file
-// is where this package stops — for the reason the other architecture stops at
-// two, which is that more than that is a hidden pointer and a memory result.
+// The same eight registers arguments arrive in, filled in order, one file
+// each for the integers and the floats.
+//
+// How many is not this package's rule to make. C returns one, and a
+// composite too big for two registers through memory — but a front end says
+// that by declaring an sret parameter, which is honoured below, rather than
+// by how many operands it hands a return. Swift's own convention brings four
+// words back in x0 to x3, and a front end that means that writes four
+// results. So the limit here is the register file: what cannot be placed is
+// refused, and what can is placed.
 func iselReturn(fn *ir.Func, c *cursor, vr *vregs, term *ir.Inst) error {
 	args := term.Args()
-	if len(args) > 2 {
-		return fmt.Errorf("return: %d values; more than two comes back through memory, which is sret and is not written yet", len(args))
+	if err := checkResultRegs(vr, "return", args); err != nil {
+		return err
 	}
 
 	// A result §5.5 brings back in registers, out of the storage the body
@@ -350,4 +357,32 @@ func readyMove(pending []copyPair) int {
 		}
 	}
 	return -1
+}
+
+// checkResultRegs refuses a result list longer than the registers that
+// bring one back.
+//
+// Counted per file, because the integers and the floats have eight each and
+// a result list may be any mixture of them.
+func checkResultRegs(vr *vregs, what string, args []*ir.Def) error {
+	var ints, floats int
+	for i, a := range args {
+		v, ok := vr.lookup(a)
+		if !ok {
+			// Not this check's business; the caller reports it with the
+			// context to say which operand.
+			continue
+		}
+		if vr.widthOfVReg(v).isFloat() {
+			floats++
+		} else {
+			ints++
+		}
+		if ints > len(aapcsIntArgs) || floats > len(aapcsFloatArgs) {
+			return fmt.Errorf("%s: operand %d has no register to come back in; "+
+				"a result larger than the register file comes back through memory, "+
+				"which is what an sret parameter says", what, i)
+		}
+	}
+	return nil
 }
