@@ -451,6 +451,15 @@ const (
 	// still X0. Putting it in X0 instead, which this package did, shifts
 	// every argument after it by one register.
 	placeIndirect
+
+	// placeSelf is X20, Swift's self register. It is not part of
+	// AAPCS64: a Swift method takes its receiver there rather than in the
+	// argument sequence, so the first ordinary argument is still X0 and
+	// the receiver costs no argument register at all. A caller that
+	// passes it as an ordinary argument instead puts it where the callee
+	// does not look, and the callee reads whatever was in X20 -- which
+	// compiles, links and answers.
+	placeSelf
 )
 
 // A regSlot is one register of an aggregate that travels in several: which

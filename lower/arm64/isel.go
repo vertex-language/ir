@@ -716,6 +716,8 @@ func emitCallSeq(c *cursor, vr *vregs, places []place,
 			dst = site.vecReg(aapcsFloatArgs[pl.i], pl.w)
 		case placeIndirect:
 			dst = site.intReg(reg.X8, pl.w)
+		case placeSelf:
+			dst = site.intReg(reg.X20, pl.w)
 		default:
 			dst = site.intReg(aapcsIntArgs[pl.i], pl.w)
 		}

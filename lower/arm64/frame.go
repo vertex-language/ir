@@ -400,6 +400,18 @@ func classifyAAPCS(args []abiArg, sret ir.FType) ([]place, error) {
 			continue
 		}
 
+		// The self register, which is beside the sequence rather than
+		// in it: the argument after this one is placed as though this
+		// one were not there.
+		if a.self {
+			w, ok := widthOf(a.t)
+			if !ok {
+				return nil, fmt.Errorf("%s is not a value the self register carries", a.t)
+			}
+			out[i] = place{kind: placeSelf, w: w}
+			continue
+		}
+
 		if a.byval.IsZero() {
 			w, ok := widthOf(a.t)
 			if !ok {
@@ -489,6 +501,7 @@ func classifyAAPCS(args []abiArg, sret ir.FType) ([]place, error) {
 type abiArg struct {
 	t     ir.RegType
 	byval ir.FType
+	self  bool
 }
 
 // scalarArgs is a list of register types with no byval among them.
@@ -502,6 +515,16 @@ func scalarArgs(types []ir.RegType) []abiArg {
 
 // byvalOf is the aggregate a parameter's byval attribute names, or the zero
 // FType when it has none.
+// selfOf reports whether a parameter travels in the self register.
+func selfOf(attrs []ir.ParamAttr) bool {
+	for _, a := range attrs {
+		if a.IsSwiftSelf() {
+			return true
+		}
+	}
+	return false
+}
+
 func byvalOf(attrs []ir.ParamAttr) ir.FType {
 	for _, a := range attrs {
 		if a.IsByVal() && a.Type() != nil {
@@ -524,6 +547,7 @@ func paramArgs(fn *ir.Func) []abiArg {
 	for i := range out {
 		if i < len(ps) {
 			out[i].byval = byvalOf(ps[i].Attrs)
+			out[i].self = selfOf(ps[i].Attrs)
 		}
 	}
 	return out
@@ -547,6 +571,7 @@ func sigArgSpec(sig *ir.Sig, args []*ir.Def) []abiArg {
 	for i := range out {
 		if i < len(ps) {
 			out[i].byval = byvalOf(ps[i].Attrs)
+			out[i].self = selfOf(ps[i].Attrs)
 		}
 	}
 	return out
@@ -621,6 +646,8 @@ func classifyParams(fn *ir.Func, entry *mir.Block, vr *vregs, fr *frame) error {
 			incoming = vr.physicalVec(aapcsFloatArgs[pl.i], pl.w)
 		case placeIndirect:
 			incoming = vr.physical(reg.X8, pl.w)
+		case placeSelf:
+			incoming = vr.physical(reg.X20, pl.w)
 		default:
 			incoming = vr.physical(aapcsIntArgs[pl.i], pl.w)
 		}

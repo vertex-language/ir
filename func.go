@@ -40,6 +40,7 @@ const (
 	paZExt
 	paSExt
 	paNoAlias
+	paSwiftSelf
 )
 
 // A ParamAttr is a param-attr or a ret-attr (§6). ZExt and SExt are the two a
@@ -53,6 +54,18 @@ var (
 	ZExt    = ParamAttr{kind: paZExt}
 	SExt    = ParamAttr{kind: paSExt}
 	NoAlias = ParamAttr{kind: paNoAlias}
+
+	// SwiftSelf marks the parameter that travels in the self register
+	// rather than in the argument sequence.
+	//
+	// It is a convention rather than a hint: a caller that puts the value
+	// in an argument register instead passes it where the callee does not
+	// look, and the callee reads whatever was in the self register. That
+	// compiles and links and answers, which is why this exists — the two
+	// sides have to agree, and the only way to agree is to say so in the
+	// signature. AAPCS64 has no such register; this is Swift's, and on
+	// AArch64 it is X20.
+	SwiftSelf = ParamAttr{kind: paSwiftSelf}
 )
 
 // ByVal passes the aggregate the pointer names by value.
@@ -67,7 +80,10 @@ func (a ParamAttr) IsSRet() bool    { return a.kind == paSRet }
 func (a ParamAttr) IsZExt() bool    { return a.kind == paZExt }
 func (a ParamAttr) IsSExt() bool    { return a.kind == paSExt }
 func (a ParamAttr) IsNoAlias() bool { return a.kind == paNoAlias }
-func (a ParamAttr) Type() *Type     { return a.typ }
+
+// IsSwiftSelf reports whether this parameter travels in the self register.
+func (a ParamAttr) IsSwiftSelf() bool { return a.kind == paSwiftSelf }
+func (a ParamAttr) Type() *Type       { return a.typ }
 
 func (a ParamAttr) String() string {
 	switch a.kind {
@@ -81,6 +97,8 @@ func (a ParamAttr) String() string {
 		return "sext"
 	case paNoAlias:
 		return "noalias"
+	case paSwiftSelf:
+		return "swiftself"
 	}
 	return ""
 }
