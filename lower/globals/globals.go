@@ -126,6 +126,12 @@ type Section interface {
 	// An addend the assembler's API cannot express is an error rather than
 	// a silently dropped offset.
 	PtrTo(sym string, addend int64) error
+
+	// Delta places a four-byte field holding to - from + addend, where the
+	// two symbols may be in different sections or different objects. A
+	// container with no relocation for it says so rather than dropping the
+	// difference.
+	Delta(to, from string, addend int64) error
 }
 
 // Lower writes every global definition in m, in declaration order.
@@ -315,8 +321,22 @@ func emitInit(tg Target, sec Section, g *ir.Global, t ir.FType, init ir.Init) er
 		if r.Sym == nil {
 			return fmt.Errorf("lower: @%s: a reloc initializer with no symbol", g.Name())
 		}
+		// A symbol difference: `a - b` in a four-byte field, which is
+		// what a relative pointer is. It is not an address, so its
+		// width is four whatever a pointer's is -- every descriptor
+		// that uses one is a table of thirty-two-bit distances.
 		if r.Minus != nil {
-			return fmt.Errorf("lower: @%s: a symbol difference initializer is not emitted yet", g.Name())
+			if size != 4 {
+				return fmt.Errorf("lower: @%s is %s; a symbol difference fills 4 bytes", g.Name(), t)
+			}
+			off, err := addend(tg, r)
+			if err != nil {
+				return fmt.Errorf("lower: @%s: %w", g.Name(), err)
+			}
+			if err := sec.Delta(r.Sym.Name(), r.Minus.Name(), off); err != nil {
+				return fmt.Errorf("lower: @%s: %w", g.Name(), err)
+			}
+			return nil
 		}
 		if size != tg.PtrBytes() {
 			return fmt.Errorf("lower: @%s is %s; an address fills %d bytes on this target", g.Name(), t, tg.PtrBytes())

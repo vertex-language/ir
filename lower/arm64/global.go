@@ -93,6 +93,14 @@ func (g globalSection) PtrTo(sym string, addend int64) error {
 	return nil
 }
 
+// Delta places a four-byte field holding to - from, plus the addend the
+// field carries. Neither symbol has to be in this section: the assembler
+// folds a pair it can and emits a relocation for a pair it cannot.
+func (g globalSection) Delta(to, from string, addend int64) error {
+	g.s.SymDelta(to, from, addend)
+	return nil
+}
+
 // lowerGlobals writes every global definition in m into am.
 func lowerGlobals(am *arm64asm.Module, m *ir.Module, opts Options) error {
 	darwin := opts.Variadic == VariadicDarwin
