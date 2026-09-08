@@ -68,6 +68,7 @@ import (
 	arm64asm "github.com/vertex-language/arm64"
 	arm64obj "github.com/vertex-language/arm64/obj"
 
+	"github.com/vertex-language/arm64/reg"
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/ir/lower/mir"
 	"github.com/vertex-language/ir/lower/regalloc"
@@ -274,6 +275,14 @@ func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Op
 	}
 
 	saved := usedCalleeSaved(pool, assigned)
+	// A function that returns an error returns it in X21, and the
+	// point of writing it is that the caller reads it. Restoring X21
+	// on the way out would put the caller's own value back and throw
+	// the error away -- so a function whose signature says it may
+	// fail does not hand that register back.
+	if funcErrorResult(fn) >= 0 {
+		saved = without(saved, reg.X21)
+	}
 	savedVec := usedCalleeSavedVec(pool, assigned)
 	fr.reserveSaves(saved)
 	fr.reserveSavesVec(savedVec)
@@ -285,4 +294,15 @@ func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Op
 		return err
 	}
 	return nil
+}
+
+// without is a register list with one register left out.
+func without(rs []reg.X, drop reg.X) []reg.X {
+	out := rs[:0]
+	for _, r := range rs {
+		if r != drop {
+			out = append(out, r)
+		}
+	}
+	return out
 }

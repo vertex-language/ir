@@ -3,6 +3,7 @@ package arm64
 import (
 	"fmt"
 
+	"github.com/vertex-language/arm64/reg"
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/ir/lower/mir"
 )
@@ -143,6 +144,7 @@ func iselReturn(fn *ir.Func, c *cursor, vr *vregs, term *ir.Inst) error {
 		return returnAggregate(fn, c, vr, agg)
 	}
 
+	errIdx := funcErrorResult(fn)
 	uses := make([]mir.VReg, 0, len(args))
 	var ints, floats int
 	for i, a := range args {
@@ -152,10 +154,16 @@ func iselReturn(fn *ir.Func, c *cursor, vr *vregs, term *ir.Inst) error {
 		}
 		w := vr.widthOfVReg(v)
 		var dst mir.VReg
-		if w.isFloat() {
+		switch {
+		// The error goes in the error register, beside the sequence
+		// rather than in it, so what follows it is placed as though
+		// it were not there.
+		case i == errIdx:
+			dst = vr.physical(reg.X21, w)
+		case w.isFloat():
 			dst = vr.physicalVec(aapcsFloatArgs[floats], w)
 			floats++
-		} else {
+		default:
 			dst = vr.physical(aapcsIntArgs[ints], w)
 			ints++
 		}

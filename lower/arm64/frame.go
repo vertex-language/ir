@@ -708,3 +708,31 @@ func classifyBlockParams(fn *ir.Func, vr *vregs) error {
 	}
 	return nil
 }
+
+// errorResult is the index of a signature's swifterror result, or -1.
+//
+// It travels in X21 rather than in the return sequence, so it is left
+// out of the ordinary placement at both ends: the results before and
+// after it are placed as though it were not there. Swift's rule, and
+// the only thing that makes it work is that both ends say so.
+func errorResult(sig *ir.Sig) int {
+	if sig == nil {
+		return -1
+	}
+	for i, r := range sig.Rets() {
+		for _, a := range r.Attrs {
+			if a.IsSwiftError() {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// funcErrorResult is errorResult for a function's own signature.
+func funcErrorResult(fn *ir.Func) int {
+	if fn == nil {
+		return -1
+	}
+	return errorResult(fn.Signature())
+}

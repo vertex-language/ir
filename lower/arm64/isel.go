@@ -640,7 +640,8 @@ func iselCallSeq(c *cursor, vr *vregs, what string, sig *ir.Sig,
 		dsts[i] = v
 	}
 
-	return emitCallSeq(c, vr, places, srcs, dsts, extraUses, op, opts, sretAgg)
+	return emitCallSeq(c, vr, places, srcs, dsts, extraUses, op, opts, sretAgg,
+		errorResult(sig))
 }
 
 // copyToOutgoing copies a byval aggregate into the outgoing argument area,
@@ -664,7 +665,8 @@ func copyToOutgoing(c *cursor, vr *vregs, pl place, src mir.VReg, opts Options) 
 // register a copy below is about to write, and a store that has already
 // happened is a value that no longer cares where it was.
 func emitCallSeq(c *cursor, vr *vregs, places []place,
-	srcs, dsts, extraUses []mir.VReg, op any, opts Options, sretAgg *aggregate) error {
+	srcs, dsts, extraUses []mir.VReg, op any, opts Options, sretAgg *aggregate,
+	errIdx int) error {
 
 	for i, pl := range places {
 		if pl.kind != placeStack {
@@ -744,6 +746,17 @@ func emitCallSeq(c *cursor, vr *vregs, places []place,
 		defs = append(defs, site.vecReg(r, wf64))
 	}
 
+	// The error register, cleared before the call. The callee writes
+	// it only on the path that fails, so a caller that did not clear
+	// it would read whatever was there and decide the call had
+	// thrown. swiftc writes `mov x21, #0` here for the same reason.
+	if errIdx >= 0 {
+		zero := site.intReg(reg.X21, w64)
+		c.Emit(mir.Instr{Op: constOp{w: w64, imm: 0}, Defs: []mir.VReg{zero}})
+		inRegs = append(inRegs, zero)
+		defs = append(defs, zero)
+	}
+
 	c.Emit(mir.Instr{Op: op, Defs: defs, Uses: inRegs})
 
 	// A result §5.5 brought back in registers, into the storage the caller
@@ -772,8 +785,15 @@ func emitCallSeq(c *cursor, vr *vregs, places []place,
 	// And the results back out of the registers they came back in, which
 	// are the registers the arguments went in.
 	var ints, floats int
-	for _, result := range dsts {
+	for i, result := range dsts {
 		w := vr.widthOfVReg(result)
+		// The one that came back in the error register, which is
+		// beside the sequence rather than in it: what follows it is
+		// read from the register it would have been read from anyway.
+		if i == errIdx {
+			emitCopy(c, result, site.intReg(reg.X21, w), w)
+			continue
+		}
 		var src mir.VReg
 		if w.isFloat() {
 			src = site.vecReg(aapcsFloatArgs[floats], w)

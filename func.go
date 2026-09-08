@@ -41,6 +41,7 @@ const (
 	paSExt
 	paNoAlias
 	paSwiftSelf
+	paSwiftError
 )
 
 // A ParamAttr is a param-attr or a ret-attr (§6). ZExt and SExt are the two a
@@ -66,6 +67,23 @@ var (
 	// signature. AAPCS64 has no such register; this is Swift's, and on
 	// AArch64 it is X20.
 	SwiftSelf = ParamAttr{kind: paSwiftSelf}
+
+	// SwiftError marks the result that travels in the error register
+	// rather than in the return sequence.
+	//
+	// It is how Swift says a call failed: the caller clears the
+	// register before the call, the callee writes to it on the path
+	// that fails, and the caller reads it afterwards -- swiftc's own
+	// code does exactly that, `mov x21, #0` before the branch and
+	// `cbnz x21` after it. A function that returns normally leaves it
+	// as it found it.
+	//
+	// On a result rather than a parameter, because that is what it
+	// is: the value travels out. The register is cleared for the call
+	// whether or not anything reads what comes back, since the callee
+	// only writes it when it fails and the caller has no other way to
+	// tell the two apart.
+	SwiftError = ParamAttr{kind: paSwiftError}
 )
 
 // ByVal passes the aggregate the pointer names by value.
@@ -83,7 +101,11 @@ func (a ParamAttr) IsNoAlias() bool { return a.kind == paNoAlias }
 
 // IsSwiftSelf reports whether this parameter travels in the self register.
 func (a ParamAttr) IsSwiftSelf() bool { return a.kind == paSwiftSelf }
-func (a ParamAttr) Type() *Type       { return a.typ }
+
+// IsSwiftError reports whether this result travels in the error
+// register.
+func (a ParamAttr) IsSwiftError() bool { return a.kind == paSwiftError }
+func (a ParamAttr) Type() *Type        { return a.typ }
 
 func (a ParamAttr) String() string {
 	switch a.kind {
@@ -99,6 +121,8 @@ func (a ParamAttr) String() string {
 		return "noalias"
 	case paSwiftSelf:
 		return "swiftself"
+	case paSwiftError:
+		return "swifterror"
 	}
 	return ""
 }

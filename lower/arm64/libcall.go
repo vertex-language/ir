@@ -134,5 +134,5 @@ func emitLibcall(c *cursor, vr *vregs, sym string, opts Options, args []mir.VReg
 		}
 		places[i] = place{kind: placeInt, i: i, w: w}
 	}
-	return emitCallSeq(c, vr, places, args, nil, nil, callOp{sym: opts.LibcallPrefix + sym}, opts, nil)
+	return emitCallSeq(c, vr, places, args, nil, nil, callOp{sym: opts.LibcallPrefix + sym}, opts, nil, -1)
 }
