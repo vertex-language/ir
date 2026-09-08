@@ -378,6 +378,14 @@ func classifyAAPCS(args []abiArg, sret ir.FType) ([]place, error) {
 	}
 
 	for i, a := range args {
+		// A pointer that is the indirect result register by
+		// declaration. Nothing is re-derived: Swift's `@out` is X8
+		// whatever the type's size, which is the whole difference
+		// from sret below.
+		if a.out {
+			out[i] = place{kind: placeIndirect, w: w64}
+			continue
+		}
 		if i == 0 && !sret.IsZero() {
 			agg, inRegs, err := sretInRegs(sret)
 			if err != nil {
@@ -502,6 +510,9 @@ type abiArg struct {
 	t     ir.RegType
 	byval ir.FType
 	self  bool
+	// out is the indirect-result pointer, which goes in X8 by
+	// declaration rather than by size. See ir.SwiftIndirectResult.
+	out bool
 }
 
 // scalarArgs is a list of register types with no byval among them.
@@ -515,6 +526,17 @@ func scalarArgs(types []ir.RegType) []abiArg {
 
 // byvalOf is the aggregate a parameter's byval attribute names, or the zero
 // FType when it has none.
+// outOf reports whether a parameter carries the address of storage
+// the result is written into, by declaration rather than by size.
+func outOf(attrs []ir.ParamAttr) bool {
+	for _, a := range attrs {
+		if a.IsSwiftIndirectResult() {
+			return true
+		}
+	}
+	return false
+}
+
 // selfOf reports whether a parameter travels in the self register.
 func selfOf(attrs []ir.ParamAttr) bool {
 	for _, a := range attrs {
@@ -548,6 +570,7 @@ func paramArgs(fn *ir.Func) []abiArg {
 		if i < len(ps) {
 			out[i].byval = byvalOf(ps[i].Attrs)
 			out[i].self = selfOf(ps[i].Attrs)
+			out[i].out = outOf(ps[i].Attrs)
 		}
 	}
 	return out
@@ -572,6 +595,7 @@ func sigArgSpec(sig *ir.Sig, args []*ir.Def) []abiArg {
 		if i < len(ps) {
 			out[i].byval = byvalOf(ps[i].Attrs)
 			out[i].self = selfOf(ps[i].Attrs)
+			out[i].out = outOf(ps[i].Attrs)
 		}
 	}
 	return out

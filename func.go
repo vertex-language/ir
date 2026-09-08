@@ -42,6 +42,7 @@ const (
 	paNoAlias
 	paSwiftSelf
 	paSwiftError
+	paSwiftOut
 )
 
 // A ParamAttr is a param-attr or a ret-attr (§6). ZExt and SExt are the two a
@@ -84,6 +85,25 @@ var (
 	// only writes it when it fails and the caller has no other way to
 	// tell the two apart.
 	SwiftError = ParamAttr{kind: paSwiftError}
+
+	// SwiftIndirectResult marks the parameter carrying the address of
+	// the storage a caller set aside for a result that is returned
+	// indirectly by convention rather than by size.
+	//
+	// It is SRet's answer without SRet's question. AAPCS64 decides
+	// indirection from the aggregate: a two-eightbyte result comes
+	// back in X0 and X1, so a caller supplies no address at all, and
+	// SRet says so by naming the type and letting §6.9 re-derive it.
+	// Swift decides it from the declaration instead. A generic
+	// function returns `@out T` through the indirect result register
+	// whatever T is, because the caller is the only one who knows how
+	// big T became -- Array's subscript getter hands an Int32 back
+	// through a four-byte slot in X8, which no size rule would ask
+	// for.
+	//
+	// So this is a statement and not a hint, the way SwiftSelf is: the
+	// register is X8 because the declaration says so.
+	SwiftIndirectResult = ParamAttr{kind: paSwiftOut}
 )
 
 // ByVal passes the aggregate the pointer names by value.
@@ -105,7 +125,12 @@ func (a ParamAttr) IsSwiftSelf() bool { return a.kind == paSwiftSelf }
 // IsSwiftError reports whether this result travels in the error
 // register.
 func (a ParamAttr) IsSwiftError() bool { return a.kind == paSwiftError }
-func (a ParamAttr) Type() *Type        { return a.typ }
+
+// IsSwiftIndirectResult reports whether this parameter carries the
+// address of storage a result is written into, by convention rather
+// than by size.
+func (a ParamAttr) IsSwiftIndirectResult() bool { return a.kind == paSwiftOut }
+func (a ParamAttr) Type() *Type                 { return a.typ }
 
 func (a ParamAttr) String() string {
 	switch a.kind {
@@ -123,6 +148,8 @@ func (a ParamAttr) String() string {
 		return "swiftself"
 	case paSwiftError:
 		return "swifterror"
+	case paSwiftOut:
+		return "swiftindirect"
 	}
 	return ""
 }
