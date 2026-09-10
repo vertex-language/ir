@@ -85,6 +85,24 @@ type Target interface {
 	PtrBytes() uint64
 }
 
+// A NamedSections target can place a global in a section the module named,
+// which is §5's section attribute.
+//
+// It is optional because it is a container question rather than an
+// architecture one: a target that cannot spell a custom section refuses the
+// global instead of putting it somewhere nothing finds it. That is not a
+// corner. An Objective-C image is a dozen named sections — __objc_classlist,
+// __objc_selrefs, __objc_methname — none of which is reachable from any call,
+// because the runtime finds its work by walking them.
+//
+// The kind is Data, ROData, RelROData or BSS, decided the same way it is for
+// an ordinary global: it says what the *contents* are, which is what decides
+// whether the section holds bytes or only a size. The name says where they
+// go.
+type NamedSections interface {
+	NamedSection(name string, k Kind) Section
+}
+
 // A TLSDescriptors target needs something beside a thread-local's
 // template, under the name the program uses.
 //
@@ -161,9 +179,6 @@ func lowerGlobal(t Target, g *ir.Global) error {
 	if _, ok := g.ComdatAttr(); ok {
 		return fmt.Errorf("lower: @%s asks for a comdat group, which is not emitted yet", g.Name())
 	}
-	if g.SectionAttr() != "" {
-		return fmt.Errorf("lower: @%s asks for section %q; only the domain's own section is emitted yet", g.Name(), g.SectionAttr())
-	}
 
 	// The name the bytes are emitted under, and how visible it is.
 	// Both change for a thread-local on a target that wants a
@@ -173,6 +188,14 @@ func lowerGlobal(t Target, g *ir.Global) error {
 	var desc TLSDescriptors
 
 	sec := t.Section(sectionFor(g))
+	if name := g.SectionAttr(); name != "" {
+		ns, ok := t.(NamedSections)
+		if !ok {
+			return fmt.Errorf("lower: @%s asks for section %q, which this target cannot name",
+				g.Name(), name)
+		}
+		sec = ns.NamedSection(name, sectionFor(g))
+	}
 	if tls {
 		sec = t.TLSSection(sectionFor(g))
 		if d, ok := t.(TLSDescriptors); ok {

@@ -22,18 +22,37 @@ type globalTarget struct {
 }
 
 func (t globalTarget) Section(k globals.Kind) globals.Section {
-	var kind amd64asm.SectionKind
+	return globalSection{t.am.Section(sectionKind(k))}
+}
+
+// sectionKind is the assembler's spelling of a global's load-time behaviour.
+// It is separate from Section because NamedSection needs the same answer: the
+// name decides where a global goes, and the kind still decides what it is.
+func sectionKind(k globals.Kind) amd64asm.SectionKind {
 	switch k {
 	case globals.ROData:
-		kind = amd64asm.ROData
+		return amd64asm.ROData
 	case globals.RelROData:
-		kind = amd64asm.RelROData
+		return amd64asm.RelROData
 	case globals.BSS:
-		kind = amd64asm.BSS
-	default:
-		kind = amd64asm.Data
+		return amd64asm.BSS
 	}
-	return globalSection{t.am.Section(kind)}
+	return amd64asm.Data
+}
+
+// NamedSection places a global in a section the module named -- §5's section
+// attribute, and the whole of how an Objective-C image is laid out.
+//
+// The kind still decides the section's load-time behaviour, because that is
+// what the *contents* are: a named BSS section holds a size and no bytes
+// however it is spelled. The name decides where the bytes go, and on Mach-O
+// it carries the type and attributes too, in as(1)'s own syntax:
+//
+//	__DATA,__objc_selrefs,literal_pointers,no_dead_strip
+//
+// The writer reads that; nothing here has to.
+func (t globalTarget) NamedSection(name string, k globals.Kind) globals.Section {
+	return globalSection{t.am.SectionNamed(name, sectionKind(k))}
 }
 
 // layout is this target's answers to globals.Layout: the shape of a type,

@@ -268,10 +268,6 @@ func TestLowerRejectsUnsupportedGlobals(t *testing.T) {
 			m.Global("f", ir.RW, ir.StoreI32.FType()).Export().
 				Init(ir.Lit(ir.Float(1.5)))
 		}},
-		{"section", func(m *ir.Module) {
-			m.Global("s", ir.RW, ir.StoreI32.FType()).Export().
-				Section(".mine").Init(ir.Lit(ir.Int(1)))
-		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := ir.NewModule("t", ir.X86_64Linux)
@@ -280,6 +276,40 @@ func TestLowerRejectsUnsupportedGlobals(t *testing.T) {
 				t.Errorf("Lower should refuse a %s global", tc.name)
 			}
 		})
+	}
+}
+
+// §5's section attribute places a global where the module says.
+//
+// It is not decoration on any target and is the whole layout of an image on
+// one: an Objective-C program's classes, selectors and metadata live in a
+// dozen named sections that nothing reaches from any call, because the
+// runtime finds its work by walking them.
+func TestLowerNamedSection(t *testing.T) {
+	m := ir.NewModule("t", ir.X86_64Linux)
+	m.Global("s", ir.RW, ir.StoreI32.FType()).Export().
+		Section(".mine").Init(ir.Lit(ir.Int(1)))
+	m.Global("plain", ir.RW, ir.StoreI32.FType()).Export().
+		Init(ir.Lit(ir.Int(2)))
+
+	o, err := amd64lower.Lower(m, amd64lower.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mine, data bool
+	for _, sec := range o.Sections() {
+		switch sec.Name() {
+		case ".mine":
+			mine = true
+		case ".data":
+			data = true
+		}
+	}
+	if !mine {
+		t.Error("the named section was not emitted")
+	}
+	if !data {
+		t.Error("the global with no section left its domain's own")
 	}
 }
 
