@@ -313,6 +313,32 @@ func TestLowerNamedSection(t *testing.T) {
 	}
 }
 
+// A named section is the only section a named global creates.
+//
+// Asking the target for the kind's own section and then replacing it with
+// the named one would create both, and a section created is a section the
+// object carries. On Mach-O that is not merely untidy: .data.rel.ro is
+// (__DATA,__const), which is also what a global naming that section asks
+// for, and a container has no way to express two sections with one identity
+// — so the object is refused, for a section neither global wanted.
+func TestLowerNamedSectionCreatesNoOther(t *testing.T) {
+	m := ir.NewModule("t", ir.X86_64Linux)
+	g := m.Global("p", ir.RO, ir.StorePtr.FType()).Export().Section(".mine")
+	g.Init(ir.RelocInit(m.ImportGlobal("other", ir.StoreI32.FType())))
+
+	o, err := amd64lower.Lower(m, amd64lower.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sec := range o.Sections() {
+		// .text is always there; every other section in this object was
+		// asked for by a global, and one global asked for one section.
+		if sec.Name() != ".mine" && sec.Name() != ".text" {
+			t.Errorf("the object carries %q, which nothing asked for", sec.Name())
+		}
+	}
+}
+
 // A float literal, as the bit pattern its format gives it. f32 and f64 are
 // the two widths a value here can have; f128 is the one a value cannot, and
 // is written all the same because §5's storage widths are not §17's register

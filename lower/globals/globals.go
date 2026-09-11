@@ -187,7 +187,14 @@ func lowerGlobal(t Target, g *ir.Global) error {
 	name, binding := g.Name(), bindingFor(g)
 	var desc TLSDescriptors
 
-	sec := t.Section(sectionFor(g))
+	// The section, asked for once. Asking the target for the kind's own
+	// section and then replacing it would *create* that section as a side
+	// effect, and a section created is a section the object carries: a unit
+	// whose every relocatable constant named its own section would still
+	// declare .data.rel.ro, which on Mach-O is (__DATA,__const) — the same
+	// identity a global that named that section asks for, and a container
+	// has no way to express two sections with one identity.
+	var sec Section
 	if name := g.SectionAttr(); name != "" {
 		ns, ok := t.(NamedSections)
 		if !ok {
@@ -195,6 +202,8 @@ func lowerGlobal(t Target, g *ir.Global) error {
 				g.Name(), name)
 		}
 		sec = ns.NamedSection(name, sectionFor(g))
+	} else {
+		sec = t.Section(sectionFor(g))
 	}
 	if tls {
 		sec = t.TLSSection(sectionFor(g))
