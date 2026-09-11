@@ -121,17 +121,25 @@ func (m *Module) deferCheck(c func() *Error) {
 
 // validSymbol is the rule for a name the linker will see, which is
 // wider than the rule for a name only this IR will see: a symbol may
-// also contain "$".
+// also contain "$", "?", "@" and ".".
 //
-// The character is there for the frontends. Swift's mangling begins
-// "$s" and every symbol it produces carries one, and every object
-// format this IR targets -- ELF, Mach-O and COFF -- takes "$" in a
-// symbol without complaint. Refusing it here would mean a frontend
-// with a mangling scheme of its own could not name its own functions,
-// which is not a decision an IR should be making for it.
+// The characters are there for the frontends. Swift's mangling begins
+// "$s" and every symbol it produces carries one; Microsoft's C++ mangling
+// begins "?" and separates its pieces with "@" -- `??0Widget@@QEAA@XZ` is
+// a constructor -- and the fastcall convention on 32-bit Windows spells a
+// plain C function `@f@4`. GCC and Clang name a cold split `main.cold`.
+// Every object format this IR targets -- ELF, Mach-O and COFF -- takes all
+// four in a symbol without complaint. Refusing them here would mean a
+// frontend with a mangling scheme of its own could not name its own
+// functions, which is not a decision an IR should be making for it.
 //
-// It stays out of validIdent, because a block label or a type name is
-// this module's own business and gains nothing from it.
+// "@" inside a name is no trouble for the text form, where a symbol is
+// "@" followed by the longest run of symbol characters: `@??0W@@QEAA@XZ`
+// reads as one name, because nothing in the grammar puts two symbols
+// against each other without whitespace between.
+//
+// They stay out of validIdent, because a block label or a type name is
+// this module's own business and gains nothing from them.
 func validSymbol(s string) bool {
 	if s == "" {
 		return false
@@ -139,7 +147,7 @@ func validSymbol(s string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {
-		case c == '_' || c == '$':
+		case c == '_' || c == '$' || c == '?' || c == '@' || c == '.':
 		case c >= 'a' && c <= 'z':
 		case c >= 'A' && c <= 'Z':
 		case c >= '0' && c <= '9' && i > 0:
