@@ -122,7 +122,7 @@ func (g globalSection) Delta(to, from string, addend int64) error {
 
 // lowerGlobals writes every global definition in m into am.
 func lowerGlobals(am *arm64asm.Module, m *ir.Module, opts Options) error {
-	darwin := opts.Variadic == VariadicDarwin
+	darwin := opts.darwin()
 	t := globalTarget{am: am, darwin: darwin, libcallPrefix: opts.LibcallPrefix}
 	if darwin && hasThreadLocal(m) {
 		// Every descriptor's first word names it, and it is the loader's

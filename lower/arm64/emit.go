@@ -16,7 +16,7 @@ import (
 // position the assembler gave it rather than becoming a sticky module error
 // with a section offset for a location.
 func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func,
-	assigned map[mir.VReg]regalloc.PhysReg, fr *frame, saved []reg.X, savedVec []reg.V) error {
+	assigned map[mir.VReg]regalloc.PhysReg, fr *frame, sv saves) error {
 
 	x := func(v mir.VReg) reg.X { return reg.X(assigned[v]) }
 	w := func(v mir.VReg) reg.W { return reg.W(assigned[v]) }
@@ -40,7 +40,7 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 		switch {
 		case i == 0:
 			text.Label(fn.Name(), funcBinding(fn), arm64asm.Func)
-			emitPrologue(text, fr, saved, savedVec)
+			emitPrologue(text, fr, sv)
 		case labeled[mb.Label]:
 			text.Label(mb.Label, arm64asm.Local)
 		default:
@@ -136,7 +136,7 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 				text.Brk(0)
 
 			case retOp:
-				emitEpilogue(text, fr, saved, savedVec)
+				emitEpilogue(text, fr, sv)
 
 			case loadOp:
 				emitLoad(text, op.w, in, x, w, d, s)
@@ -171,13 +171,13 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 				text.AddImm64(x(in.Defs[0]), x(in.Uses[0]), op.imm)
 
 			case frameOp:
-				emitFrameAddr(text, x(in.Defs[0]), op.off)
+				emitFrameAddr(text, x(in.Defs[0]), fr.local(op.off))
 
 			case frameLoadOp:
-				emitFrameLoad(text, op.w, op.off, in, x, w, d, s)
+				emitFrameLoad(text, op.w, fr.local(op.off), in, x, w, d, s)
 
 			case spillOp:
-				b, o := frameBase(text, op.off)
+				b, o := frameBase(text, fr.local(op.off))
 				if op.float {
 					text.SturImmD(d(in.Uses[0]), arm64asm.Mem64(b).Off(o))
 					break
@@ -185,7 +185,7 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 				text.SturImm64(x(in.Uses[0]), arm64asm.Mem64(b).Off(o))
 
 			case reloadOp:
-				b, o := frameBase(text, op.off)
+				b, o := frameBase(text, fr.local(op.off))
 				if op.float {
 					text.LdurImmD(d(in.Defs[0]), arm64asm.Mem64(b).Off(o))
 					break
@@ -196,7 +196,7 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 				emitArgStore(text, op, in, x, w, d, s)
 
 			case frameStoreOp:
-				emitFrameStore(text, op.w, op.off, in, x, w, d, s)
+				emitFrameStore(text, op.w, fr.local(op.off), in, x, w, d, s)
 
 			case loadAtOp:
 				emitLoadAt(text, op, in, x, w, d, s)
@@ -417,7 +417,7 @@ func cond(c condCode) arm64asm.Cond {
 // STP with pre-index is the push: it stores the pair and updates SP in one
 // instruction, which is what makes a frame record cost one instruction rather
 // than a subtract and two stores.
-func emitPrologue(text *arm64asm.Section, fr *frame, saved []reg.X, savedVec []reg.V) {
+func emitPrologue(text *arm64asm.Section, fr *frame, sv saves) {
 	if !fr.needed() {
 		return
 	}
@@ -426,13 +426,13 @@ func emitPrologue(text *arm64asm.Section, fr *frame, saved []reg.X, savedVec []r
 	if n := fr.size(); n > 0 {
 		text.SubImm64(reg.SP, reg.SP, int64(n))
 	}
-	for _, r := range saved {
+	for _, r := range sv.x {
 		b, o := frameBase(text, fr.saveAt[r])
 		text.SturImm64(r, arm64asm.Mem64(b).Off(o))
 	}
 	// Sixty-four bits of each, which is all the ABI preserves and all an
 	// f64 occupies.
-	for _, r := range savedVec {
+	for _, r := range sv.v {
 		b, o := frameBase(text, fr.saveAtVec[r])
 		text.SturImmD(reg.D(r), arm64asm.Mem64(b).Off(o))
 	}
@@ -441,13 +441,13 @@ func emitPrologue(text *arm64asm.Section, fr *frame, saved []reg.X, savedVec []r
 // emitEpilogue undoes it. SP comes back from X29 rather than by adding the
 // frame size, which is the same instruction count and is right whether or not
 // anything moved SP in between.
-func emitEpilogue(text *arm64asm.Section, fr *frame, saved []reg.X, savedVec []reg.V) {
+func emitEpilogue(text *arm64asm.Section, fr *frame, sv saves) {
 	if fr.needed() {
-		for _, r := range saved {
+		for _, r := range sv.restore {
 			b, o := frameBase(text, fr.saveAt[r])
 			text.LdurImm64(r, arm64asm.Mem64(b).Off(o))
 		}
-		for _, r := range savedVec {
+		for _, r := range sv.v {
 			b, o := frameBase(text, fr.saveAtVec[r])
 			text.LdurImmD(reg.D(r), arm64asm.Mem64(b).Off(o))
 		}

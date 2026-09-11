@@ -33,6 +33,20 @@ type frame struct {
 	// ABI makes and the promise this package needs are the same one.
 	saveAtVec map[reg.V]int64
 
+	// saveBytes is how much of the frame the callee-saved area occupies.
+	//
+	// It sits directly below the frame record, above every local, and that
+	// is not a preference: libunwind reads a saved register out of a fixed
+	// displacement from X29 rather than out of anything the object file
+	// says, so a frame that puts its saves anywhere else cannot be
+	// described by a compact unwind encoding at all. See unwind.go.
+	//
+	// Which is awkward, because the size is not known until the register
+	// allocator has run and every local already has an offset. So the
+	// locals are planned as though the area were not there and moved down
+	// by this much on the way out — that is what local() below is.
+	saveBytes int64
+
 	// force makes a prologue even when nothing needs storage.
 	force bool
 
@@ -48,7 +62,21 @@ type frame struct {
 const maxAlign = 16
 
 // size is how much the prologue subtracts from SP after the frame record.
-func (f *frame) size() uint64 { return alignUp(f.next+f.outArgs, maxAlign) }
+func (f *frame) size() uint64 {
+	return alignUp(f.next+uint64(f.saveBytes)+f.outArgs, maxAlign)
+}
+
+// local is where an offset planned before the save area existed finally is.
+//
+// The sign is the whole test. Everything this function owns is below X29 and
+// is therefore negative; an incoming stack argument is in the caller's frame,
+// above the frame record, and is positive. Only the first moves.
+func (f *frame) local(off int64) int64 {
+	if off < 0 {
+		return off - f.saveBytes
+	}
+	return off
+}
 
 // outgoing is the size of the outgoing argument area, which a dynamic
 // allocation has to leave at the bottom of the frame.
@@ -86,24 +114,26 @@ func (f *frame) reserveBytes(size, align uint64) int64 {
 	return -int64(f.next)
 }
 
-func (f *frame) reserveSaves(regs []reg.X) {
-	if len(regs) == 0 {
+// reserveSaves gives every callee-saved register a slot, in the one order the
+// compact unwind encoding can name: X29-8 downwards, the integer file before
+// the vector file, each in register order. unwindEncoding depends on it and
+// so does every unwinder that reads what it writes.
+func (f *frame) reserveSaves(regs []reg.X, vecs []reg.V) {
+	if len(regs) == 0 && len(vecs) == 0 {
 		return
 	}
 	f.saveAt = make(map[reg.X]int64, len(regs))
+	f.saveAtVec = make(map[reg.V]int64, len(vecs))
+	at := int64(0)
 	for _, r := range regs {
-		f.saveAt[r] = f.reserve()
+		at -= 8
+		f.saveAt[r] = at
 	}
-}
-
-func (f *frame) reserveSavesVec(regs []reg.V) {
-	if len(regs) == 0 {
-		return
+	for _, r := range vecs {
+		at -= 8
+		f.saveAtVec[r] = at
 	}
-	f.saveAtVec = make(map[reg.V]int64, len(regs))
-	for _, r := range regs {
-		f.saveAtVec[r] = f.reserve()
-	}
+	f.saveBytes = -at
 }
 
 // planFrame assigns every ptr.alloc in fn a slot and returns the frame they

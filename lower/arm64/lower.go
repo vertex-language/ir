@@ -60,6 +60,10 @@
 //     it is refused by name.
 //   - §G3, which no backend in this tree implements. §G4 is implemented;
 //     see asm.go.
+//   - invoke, resume and pad blocks. The unwind tables that describe this
+//     backend's frames are written — see unwind.go — so a foreign exception
+//     can be thrown *through* a function lowered here, but a function
+//     lowered here cannot yet catch one.
 package arm64
 
 import (
@@ -126,6 +130,14 @@ type Options struct {
 	// does not.
 	LibcallPrefix string
 }
+
+// darwin reports whether the module is being built for Apple's platform.
+//
+// Read off the variadic convention, which is the one thing in Options that
+// only Darwin selects. Not a happy spelling, but the alternative is a second
+// field stating the same fact twice and a caller that can set them
+// inconsistently.
+func (o Options) darwin() bool { return o.Variadic == VariadicDarwin }
 
 func (o Options) features() arm64asm.FeatureSet {
 	var unset arm64asm.FeatureSet
@@ -206,7 +218,17 @@ func checkLayout(m *ir.Module) error {
 // lowerFunc runs the full pipeline for one function.
 func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Options) error {
 	if body, ok := fn.AsmBodyText(); ok {
-		return emitAsmBody(text, fn, body)
+		start := text.Offset()
+		if err := emitAsmBody(text, fn, body); err != nil {
+			return err
+		}
+		if opts.darwin() {
+			// An encoding of zero: nothing here knows what the text does
+			// to SP, and a record saying so is better than no record at
+			// all. See unwind.go.
+			emitCompactUnwind(am, fn.Name(), 0, uint32(text.Offset()-start), "")
+		}
+		return nil
 	}
 
 	fr, err := planFrame(fn, opts)
@@ -280,31 +302,26 @@ func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Op
 		return fmt.Errorf("lower: %s: regalloc: %w", fn.Name(), err)
 	}
 
-	saved := usedCalleeSaved(pool, assigned)
-	// A function that returns an error returns it in X21, and the
-	// point of writing it is that the caller reads it. Restoring X21
-	// on the way out would put the caller's own value back and throw
-	// the error away -- so a function whose signature says it may
-	// fail does not hand that register back.
-	if funcErrorResult(fn) >= 0 {
-		saved = without(saved, reg.X21)
-	}
-	savedVec := usedCalleeSavedVec(pool, assigned)
-	fr.reserveSaves(saved)
-	fr.reserveSavesVec(savedVec)
-	if len(saved) > 0 || len(savedVec) > 0 {
+	sv := planSaves(fn, pool, assigned)
+	fr.reserveSaves(sv.x, sv.v)
+	if len(sv.x) > 0 || len(sv.v) > 0 {
 		fr.force = true
 	}
 
-	if err := emit(am, text, fn, mf, assigned, fr, saved, savedVec); err != nil {
+	start := text.Offset()
+	if err := emit(am, text, fn, mf, assigned, fr, sv); err != nil {
 		return err
+	}
+	if opts.darwin() {
+		emitCompactUnwind(am, fn.Name(), unwindEncoding(fr, sv), uint32(text.Offset()-start), "")
 	}
 	return nil
 }
 
-// without is a register list with one register left out.
+// without is a register list with one register left out. A copy: the list it
+// is given is the prologue's, and the caller wants both.
 func without(rs []reg.X, drop reg.X) []reg.X {
-	out := rs[:0]
+	out := make([]reg.X, 0, len(rs))
 	for _, r := range rs {
 		if r != drop {
 			out = append(out, r)
