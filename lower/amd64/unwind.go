@@ -100,7 +100,7 @@ func unwindRegNum(r reg.R64) uint8 { return uint8(r) }
 // It is called only for the Microsoft ABI: SysV walks a frame with DWARF CFI,
 // which this package does not emit either, and putting a .pdata section in an
 // ELF object would be a section nothing reads.
-func emitUnwind(am *amd64asm.Module, fnName string, textLen int, p prologueShape) error {
+func emitUnwind(am *amd64asm.Module, text *amd64asm.Section, fnName string, textLen int, p prologueShape) error {
 	if !p.present {
 		// A leaf. The specification says outright that a leaf function
 		// needs no entry, because the unwinder can recover the caller
@@ -122,7 +122,16 @@ func emitUnwind(am *amd64asm.Module, fnName string, textLen int, p prologueShape
 		return fmt.Errorf("unwind %s: %d unwind codes do not fit CountOfCodes", fnName, len(codes)/2)
 	}
 
-	xdata := am.SectionNamed(xdataSection, amd64asm.ROData)
+	// A comdat function's records go in sections that live or die with
+	// it: when the linker keeps another unit's copy of the function, a
+	// .pdata entry pointing at the discarded one is a relocation against
+	// nothing, and link.exe refuses the object. Associative COMDAT is
+	// COFF's word for "these bytes belong to that section".
+	xdata, pdata := am.SectionNamed(xdataSection, amd64asm.ROData), am.SectionNamed(pdataSection, amd64asm.ROData)
+	if text.Comdat() != "" {
+		xdata = am.AssociativeSection(xdataSection, amd64asm.ROData, text)
+		pdata = am.AssociativeSection(pdataSection, amd64asm.ROData, text)
+	}
 	xdata.Align(4)
 	label := "$unwind$" + fnName
 	xdata.Label(label, amd64asm.Local)
@@ -141,7 +150,6 @@ func emitUnwind(am *amd64asm.Module, fnName string, textLen int, p prologueShape
 	// only form the exception directory has. The end address is the start
 	// plus the function's length, written as an addend rather than a
 	// second symbol because there is no symbol at a function's end.
-	pdata := am.SectionNamed(pdataSection, amd64asm.ROData)
 	pdata.Align(4)
 	pdata.Ref(amd64asm.Ref(fnName, amd64asm.RefImageRel32))
 	pdata.Ref(amd64asm.Ref(fnName, amd64asm.RefImageRel32).Add(int64(textLen)))

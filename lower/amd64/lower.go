@@ -383,7 +383,21 @@ func Lower(m *ir.Module, opts Options) (*amd64obj.Object, error) {
 	for _, it := range m.Items() {
 		switch x := it.(type) {
 		case *ir.Func:
-			if err := lowerFunc(am, text, x, opts); err != nil {
+			// A comdat function is a section of its own, elected on its
+			// name, so that the linker can discard the copies every other
+			// unit emitted without touching anything beside them. Its
+			// unwind records follow it (see emitUnwind).
+			sec := text
+			if key, comdat := x.ComdatAttr(); comdat {
+				if key == "" {
+					key = x.Name()
+				}
+				if key != x.Name() {
+					return nil, fmt.Errorf("lower: @%s asks for comdat %q; a function's group is keyed on its own name", x.Name(), key)
+				}
+				sec = am.ComdatSection(amd64asm.Text.String(), amd64asm.Text, key)
+			}
+			if err := lowerFunc(am, sec, x, opts); err != nil {
 				return nil, err
 			}
 		case *ir.ModuleAsm:
@@ -519,7 +533,7 @@ func lowerFunc(am *amd64asm.Module, text *amd64asm.Section, fn *ir.Func, opts Op
 		// Windows walks a frame through .pdata and .xdata rather than
 		// through the code, and a frame with no record is one nothing can
 		// unwind through. See unwind.go.
-		return emitUnwind(am, fn.Name(), text.Offset()-start, shape)
+		return emitUnwind(am, text, fn.Name(), text.Offset()-start, shape)
 	}
 	return nil
 }

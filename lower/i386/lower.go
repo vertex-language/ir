@@ -123,6 +123,12 @@ func Lower(m *ir.Module, opts Options) (*i386obj.Object, error) {
 	for _, it := range m.Items() {
 		switch x := it.(type) {
 		case *ir.Func:
+			if _, comdat := x.ComdatAttr(); comdat {
+				// Emitting it as an ordinary definition would link once
+				// and fail the moment a second unit carried the same
+				// function; refusing keeps the failure at the compiler.
+				return nil, fmt.Errorf("lower: @%s asks for a comdat group, which this target does not emit yet", x.Name())
+			}
 			if err := lowerFunc(am, text, x, opts); err != nil {
 				return nil, err
 			}

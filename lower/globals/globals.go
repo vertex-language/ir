@@ -103,6 +103,18 @@ type NamedSections interface {
 	NamedSection(name string, k Kind) Section
 }
 
+// A ComdatSections target can place a global in a section the linker keeps
+// once however many objects define it -- §5's comdat attribute, which is
+// what a virtual table or a template's static member is in every unit that
+// uses it.
+//
+// The section is elected on the global's own name, or on the key the
+// attribute names. A target without the notion refuses the global rather
+// than emitting a definition the linker will see twice.
+type ComdatSections interface {
+	ComdatSection(k Kind, leader string) Section
+}
+
 // A TLSDescriptors target needs something beside a thread-local's
 // template, under the name the program uses.
 //
@@ -176,9 +188,6 @@ func lowerGlobal(t Target, g *ir.Global) error {
 		// second.
 		return fmt.Errorf("lower: @%s is in domain tls, which needs a TLS model and its relocations", g.Name())
 	}
-	if _, ok := g.ComdatAttr(); ok {
-		return fmt.Errorf("lower: @%s asks for a comdat group, which is not emitted yet", g.Name())
-	}
 
 	// The name the bytes are emitted under, and how visible it is.
 	// Both change for a thread-local on a target that wants a
@@ -195,7 +204,24 @@ func lowerGlobal(t Target, g *ir.Global) error {
 	// identity a global that named that section asks for, and a container
 	// has no way to express two sections with one identity.
 	var sec Section
-	if name := g.SectionAttr(); name != "" {
+	if key, comdat := g.ComdatAttr(); comdat {
+		cs, ok := t.(ComdatSections)
+		if !ok {
+			return fmt.Errorf("lower: @%s asks for a comdat group, which this target cannot emit", g.Name())
+		}
+		if key == "" {
+			key = g.Name()
+		}
+		if key != g.Name() {
+			// The section is elected on a symbol it defines, and the
+			// only symbol a global's section defines is the global.
+			return fmt.Errorf("lower: @%s asks for comdat %q; a global's group is keyed on its own name", g.Name(), key)
+		}
+		if name := g.SectionAttr(); name != "" {
+			return fmt.Errorf("lower: @%s asks for both a comdat group and section %q, which is not emitted yet", g.Name(), name)
+		}
+		sec = cs.ComdatSection(sectionFor(g), key)
+	} else if name := g.SectionAttr(); name != "" {
 		ns, ok := t.(NamedSections)
 		if !ok {
 			return fmt.Errorf("lower: @%s asks for section %q, which this target cannot name",

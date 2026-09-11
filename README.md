@@ -294,6 +294,15 @@ else.
    §B, §C and §C2 out of `f128` are complete. arm64 needs the same table
    and has none of it; i386's layout does not admit `f128` at all.
 
+`comdat` is emitted on amd64 for functions and globals -- a COMDAT
+section in COFF with the function's unwind records associated, a
+`GRP_COMDAT` group in ELF, a folded weak definition in Mach-O -- and is
+what a C++ frontend puts every inline function and virtual table in. A
+key other than the symbol's own name is refused, since a section is
+elected on a symbol it defines and these sections define one. arm64 and
+i386 refuse the attribute rather than emit a definition the linker would
+see twice.
+
 Also unwritten on all three: `sret` as something *lowering introduces*.
 A signature that states one is honoured; a return of more values than
 the ABI's registers hold would have to allocate the storage and rewrite

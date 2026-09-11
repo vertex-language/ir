@@ -55,6 +55,12 @@ func (t globalTarget) NamedSection(name string, k globals.Kind) globals.Section 
 	return globalSection{t.am.SectionNamed(name, sectionKind(k))}
 }
 
+// ComdatSection places a global in a section of its own that the linker
+// keeps once: the assembler's COMDAT section, elected on the global.
+func (t globalTarget) ComdatSection(k globals.Kind, leader string) globals.Section {
+	return globalSection{t.am.ComdatSection(sectionKind(k).String(), sectionKind(k), leader)}
+}
+
 // layout is this target's answers to globals.Layout: the shape of a type,
 // which §2's symbolic constants need and which has nothing to do with the
 // sections globalTarget also carries. isel resolves a sizeof with one of
