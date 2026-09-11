@@ -332,7 +332,7 @@ target        ::= Label ( "(" ( register ( "," register )* )? ")" )?
 label-list    ::= Label ( "," Label )*
 
 pad-clause    ::= "cleanup"
-                | "catch"  GlobalName
+                | "catch"  ( GlobalName | "null" )
                 | "filter" "[" ( GlobalName ( "," GlobalName )* )? "]"
 ```
 

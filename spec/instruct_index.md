@@ -518,6 +518,7 @@ unwind edge carries no argument list while the normal edge does.
 | --- | --- |
 | `cleanup` | The pad runs destructors and re-raises. Sufficient for all of C. |
 | `catch @ti` | The pad handles the type described by type-info global `@ti`. |
+| `catch null` | The pad handles anything. A clause with no type-info at all, which is what a language's catch-all clause compiles to. |
 | `filter [@ti, ...]` | The pad handles anything *not* in the listed set. |
 
 A function containing `invoke`, `invokeind`, or a pad block declares

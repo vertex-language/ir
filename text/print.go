@@ -508,6 +508,14 @@ func (pr *printer) padClause(c ir.PadClause) {
 	case ir.PadCleanup:
 		pr.s(" cleanup")
 	case ir.PadCatch:
+		// A clause with no type-info catches everything. `catch null`
+		// rather than a bare `catch`, so that the clause still names what
+		// it matches against and the two forms do not have to be told
+		// apart by what follows them.
+		if c.TypeInfo() == nil {
+			pr.s(" catch null")
+			break
+		}
 		pr.f(" catch @%s", c.TypeInfo().Name())
 	case ir.PadFilter:
 		pr.s(" filter [")

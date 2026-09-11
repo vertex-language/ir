@@ -99,16 +99,11 @@ func (g globalSection) Object(name string, b globals.Binding) {
 	g.s.Label(name, binding, arm64asm.ObjectSym)
 }
 
-// PtrTo places an eight-byte absolute reference.
-//
-// No addend. arm64/obj's Ref takes a name and a kind and nothing else, so an
-// offset from a symbol is expressible in the format and not in this API —
-// refused rather than silently dropped.
+// PtrTo places an eight-byte absolute reference, plus whatever the field
+// already holds: an absolute relocation's addend travels in the field, which
+// is where every container's unsigned relocation reads one from.
 func (g globalSection) PtrTo(sym string, addend int64) error {
-	if addend != 0 {
-		return fmt.Errorf("an addend on an address initializer is not emitted yet")
-	}
-	g.s.Ref(sym, arm64asm.RefAbs64)
+	g.s.RefAt(sym, addend, arm64asm.RefAbs64)
 	return nil
 }
 
