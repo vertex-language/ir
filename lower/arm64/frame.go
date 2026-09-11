@@ -155,7 +155,11 @@ func planFrame(fn *ir.Func, opts Options) (*frame, error) {
 
 	var off uint64
 	for _, blk := range fn.Blocks() {
-		for _, in := range blk.Insts() {
+		// All, not Insts: an invoke is a terminator, and it is a call —
+		// it needs the frame record saved and it needs room for whatever
+		// arguments did not fit in registers. A frame planned without it
+		// puts the outgoing area over the lowest local.
+		for _, in := range blk.All() {
 			switch in.Op().Verb {
 			case ir.VTLSAddr:
 				// The thread-local sequence calls a thunk, so it needs
