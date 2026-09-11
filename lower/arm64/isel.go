@@ -601,6 +601,24 @@ func iselCallSeq(c *cursor, vr *vregs, what string, sig *ir.Sig,
 	if err := checkResultRegs(vr, what, results); err != nil {
 		return err
 	}
+	dsts := make([]mir.VReg, len(results))
+	for i, d := range results {
+		v, err := vr.define(d)
+		if err != nil {
+			return fmt.Errorf("%s: %w", what, err)
+		}
+		dsts[i] = v
+	}
+	return iselCallSeqTo(c, vr, what, sig, args, dsts, extraUses, op, opts, -1)
+}
+
+// iselCallSeqTo is iselCallSeq over destinations that already exist.
+//
+// An invoke's results are its normal target's trailing parameters, which have
+// vregs before the terminator is reached; site is that invoke's index in the
+// exception plan, or -1 for an ordinary call.
+func iselCallSeqTo(c *cursor, vr *vregs, what string, sig *ir.Sig,
+	args []*ir.Def, dsts, extraUses []mir.VReg, op any, opts Options, unwindSite int) error {
 
 	named := len(args)
 	variadic := false
@@ -631,17 +649,8 @@ func iselCallSeq(c *cursor, vr *vregs, what string, sig *ir.Sig,
 		srcs[i] = v
 	}
 
-	dsts := make([]mir.VReg, len(results))
-	for i, d := range results {
-		v, err := vr.define(d)
-		if err != nil {
-			return fmt.Errorf("%s: %w", what, err)
-		}
-		dsts[i] = v
-	}
-
 	return emitCallSeq(c, vr, places, srcs, dsts, extraUses, op, opts, sretAgg,
-		errorResult(sig))
+		errorResult(sig), unwindSite)
 }
 
 // copyToOutgoing copies a byval aggregate into the outgoing argument area,
@@ -666,7 +675,7 @@ func copyToOutgoing(c *cursor, vr *vregs, pl place, src mir.VReg, opts Options) 
 // happened is a value that no longer cares where it was.
 func emitCallSeq(c *cursor, vr *vregs, places []place,
 	srcs, dsts, extraUses []mir.VReg, op any, opts Options, sretAgg *aggregate,
-	errIdx int) error {
+	errIdx, unwindSite int) error {
 
 	for i, pl := range places {
 		if pl.kind != placeStack {
@@ -757,7 +766,16 @@ func emitCallSeq(c *cursor, vr *vregs, places []place,
 		defs = append(defs, zero)
 	}
 
+	// The bracket an invoke's call-site entry names, around the branch and
+	// nothing else: a personality looks up the return address, and the
+	// copies below did not run on the path that unwound. See invoke.go.
+	if unwindSite >= 0 {
+		c.Emit(mir.Instr{Op: siteOp{site: unwindSite}})
+	}
 	c.Emit(mir.Instr{Op: op, Defs: defs, Uses: inRegs})
+	if unwindSite >= 0 {
+		c.Emit(mir.Instr{Op: siteOp{site: unwindSite, end: true}})
+	}
 
 	// A result §5.5 brought back in registers, into the storage the caller
 	// set aside for it. There is no ir.Def to copy into — the call returns

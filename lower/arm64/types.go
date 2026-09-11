@@ -254,6 +254,22 @@ type (
 		float bool
 	}
 
+	// siteOp is one end of an invoke's call-site bracket: a mark that
+	// records where in the text the call begins and ends, for the tables
+	// in lsda.go. It emits no instruction.
+	siteOp struct {
+		site int
+		end  bool
+	}
+
+	// padEntryOp is where a pad block's two parameters come from.
+	//
+	// The personality routine branches here with the exception object in X0
+	// and its selector in X1. Nothing in this function wrote them, so this
+	// is their definition as far as the allocator is concerned; it also
+	// emits no instruction, and records the landing pad's address.
+	padEntryOp struct{ pad int }
+
 	// callOp names the callee, with arguments and clobbers pinned.
 	callOp struct{ sym string }
 

@@ -163,11 +163,15 @@ func planFrame(fn *ir.Func, opts Options) (*frame, error) {
 				// does: X30 does not survive it.
 				fr.force = true
 				continue
-			case ir.VCall, ir.VCallInd:
+			case ir.VCall, ir.VCallInd, ir.VInvoke, ir.VInvokeInd:
 				// A call needs the frame record saved, because it will
 				// overwrite X30 with its own return address.
 				fr.force = true
 				fr.reserveOutArgs(callStackBytes(in, opts))
+				continue
+			case ir.VResume:
+				// _Unwind_Resume is a call like any other.
+				fr.force = true
 				continue
 			case ir.VFrameAddr, ir.VReturnAddr:
 				fr.force = true
@@ -236,7 +240,7 @@ func callStackBytes(in *ir.Inst, opts Options) uint64 {
 // right and reserve room the call never writes to.
 func callArgs(in *ir.Inst) []*ir.Def {
 	args := in.Args()
-	if in.Op().Verb == ir.VCallInd && len(args) > 0 {
+	if v := in.Op().Verb; (v == ir.VCallInd || v == ir.VInvokeInd) && len(args) > 0 {
 		return args[1:]
 	}
 	return args
@@ -246,11 +250,11 @@ func callArgs(in *ir.Inst) []*ir.Def {
 // where its variadic tail begins.
 func callSig(in *ir.Inst) *ir.Sig {
 	switch in.Op().Verb {
-	case ir.VCall:
+	case ir.VCall, ir.VInvoke:
 		if callee := in.Callee(); callee != nil {
 			return callee.Signature()
 		}
-	case ir.VCallInd:
+	case ir.VCallInd, ir.VInvokeInd:
 		if t := in.NamedType(); t != nil {
 			return t.Sig()
 		}

@@ -80,9 +80,20 @@ func emitCopy(e emitter, dst, src mir.VReg, w width) {
 }
 
 // iselBlock lowers one ir block's instructions and its terminator.
-func iselBlock(fn *ir.Func, mf *mir.Func, vr *vregs, fr *frame, blk *ir.Block, mb *mir.Block, opts Options) error {
+func iselBlock(fn *ir.Func, mf *mir.Func, vr *vregs, fr *frame, blk *ir.Block, mb *mir.Block,
+	plan *ehPlan, opts Options) error {
+
 	c := newCursor(fn, mf, mb)
 	term := blk.Term()
+
+	if blk.IsPad() {
+		if plan == nil {
+			return fmt.Errorf("@%s is a pad block and the function has no exception plan", blk.Label())
+		}
+		if err := iselPadEntry(c, vr, plan, blk); err != nil {
+			return err
+		}
+	}
 
 	for _, in := range blk.Insts() {
 		if in == term {
@@ -112,6 +123,10 @@ func iselBlock(fn *ir.Func, mf *mir.Func, vr *vregs, fr *frame, blk *ir.Block, m
 		return iselReturn(fn, c, vr, term)
 	case ir.VAsmGoto:
 		return iselAsmGoto(fn, mf, c, vr, term)
+	case ir.VInvoke, ir.VInvokeInd:
+		return iselInvoke(fn, mf, c, vr, plan, term, opts)
+	case ir.VResume:
+		return iselResume(c, vr, term, opts)
 	}
 	return fmt.Errorf("%s is not a terminator this package lowers", term.Op())
 }

@@ -69,7 +69,7 @@ func runNativeTrap(t *testing.T, m *ir.Module, mainC string) {
 
 // buildNative lowers m, writes it as a Mach-O object, links it against mainC
 // and returns the path of the executable.
-func buildNative(t *testing.T, m *ir.Module, mainC string) string {
+func buildNative(t *testing.T, m *ir.Module, mainC string, link ...string) string {
 	t.Helper()
 	if runtime.GOARCH != "arm64" || runtime.GOOS != "darwin" {
 		t.Skip("not on Apple Silicon; skipping the link-and-run check")
@@ -98,6 +98,9 @@ func buildNative(t *testing.T, m *ir.Module, mainC string) string {
 	if err := arm64macho.Write(&buf, o, arm64macho.Options{
 		Platform: machocore.PlatformMacOS,
 		MinOS:    "11.0",
+		// Every unwind table in the object depends on it; see the
+		// field's own comment.
+		Subsections: true,
 	}); err != nil {
 		t.Fatalf("macho.Write: %v", err)
 	}
@@ -113,7 +116,8 @@ func buildNative(t *testing.T, m *ir.Module, mainC string) string {
 	}
 
 	bin := filepath.Join(dir, "prog")
-	if out, err := exec.Command(clang, "-o", bin, mainPath, objPath).CombinedOutput(); err != nil {
+	args := append([]string{"-o", bin, mainPath, objPath}, link...)
+	if out, err := exec.Command(clang, args...).CombinedOutput(); err != nil {
 		t.Fatalf("link: %v\n%s", err, out)
 	}
 	return bin

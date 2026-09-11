@@ -60,10 +60,14 @@
 //     it is refused by name.
 //   - §G3, which no backend in this tree implements. §G4 is implemented;
 //     see asm.go.
-//   - invoke, resume and pad blocks. The unwind tables that describe this
-//     backend's frames are written — see unwind.go — so a foreign exception
-//     can be thrown *through* a function lowered here, but a function
-//     lowered here cannot yet catch one.
+//   - §G3 against a container other than Mach-O. invoke, resume and pad
+//     blocks are lowered, and unwind.go and lsda.go write the two tables
+//     Darwin reads; ELF needs DWARF call frame information in __eh_frame,
+//     which nothing here builds, so a pad block in an ELF module is refused
+//     rather than emitted without the tables that make it work.
+//   - a pad's filter clause, which is C++'s exception specification. It
+//     needs a second table after the type table and a negative index to
+//     reach it; see lsda.go.
 package arm64
 
 import (
@@ -164,6 +168,9 @@ func Lower(m *ir.Module, opts Options) (*arm64obj.Object, error) {
 	for _, s := range libcallSyms(m, opts) {
 		am.Extern(s)
 	}
+	for _, s := range personalitySyms(m) {
+		am.Extern(s)
+	}
 
 	if err := lowerGlobals(am, m, opts); err != nil {
 		return nil, err
@@ -226,7 +233,7 @@ func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Op
 			// An encoding of zero: nothing here knows what the text does
 			// to SP, and a record saying so is better than no record at
 			// all. See unwind.go.
-			emitCompactUnwind(am, fn.Name(), 0, uint32(text.Offset()-start), "")
+			emitCompactUnwind(am, fn.Name(), 0, uint32(text.Offset()-start), "", "")
 		}
 		return nil
 	}
@@ -234,6 +241,10 @@ func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Op
 	fr, err := planFrame(fn, opts)
 	if err != nil {
 		return err
+	}
+	plan, err := planEH(fn)
+	if err != nil {
+		return fmt.Errorf("lower: %w", err)
 	}
 
 	mf := mir.NewFunc()
@@ -279,7 +290,7 @@ func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Op
 			return nil
 		}
 		done[i] = true
-		if err := iselBlock(fn, mf, vr, fr, blk, mblocks[i], opts); err != nil {
+		if err := iselBlock(fn, mf, vr, fr, blk, mblocks[i], plan, opts); err != nil {
 			return fmt.Errorf("lower: %s: %w", fn.Name(), err)
 		}
 		return nil
@@ -309,13 +320,38 @@ func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Op
 	}
 
 	start := text.Offset()
-	if err := emit(am, text, fn, mf, assigned, fr, sv); err != nil {
+	if err := emit(am, text, fn, mf, assigned, fr, sv, plan); err != nil {
 		return err
 	}
-	if opts.darwin() {
-		emitCompactUnwind(am, fn.Name(), unwindEncoding(fr, sv), uint32(text.Offset()-start), "")
+	if !opts.darwin() {
+		// The tables below are Mach-O's. An ELF target needs DWARF call
+		// frame information instead, which nothing here writes -- so a
+		// function with a pad block would link and then fail to unwind,
+		// and saying so is better than emitting half of it.
+		if plan != nil {
+			return fmt.Errorf("lower: %s: a pad block needs unwind tables, which this package writes only for Mach-O", fn.Name())
+		}
+		return nil
 	}
+	lsda := ""
+	if plan != nil {
+		s, err := emitLSDA(am, fn, plan)
+		if err != nil {
+			return err
+		}
+		lsda = s
+	}
+	emitCompactUnwind(am, fn.Name(), unwindEncoding(fr, sv), uint32(text.Offset()-start),
+		personalityOf(fn), lsda)
 	return nil
+}
+
+// personalityOf is the routine that reads this function's tables, or "".
+func personalityOf(fn *ir.Func) string {
+	if p := fn.PersonalityFn(); p != nil {
+		return p.Name()
+	}
+	return ""
 }
 
 // without is a register list with one register left out. A copy: the list it

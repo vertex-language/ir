@@ -30,6 +30,10 @@ const memsetSym = "memset"
 // memcpySym is what a byval aggregate too large for its registers becomes.
 const memcpySym = "memcpy"
 
+// resumeSym is §G3's resume: the exception goes back to the unwinder, which
+// is a call into the unwinder's own library rather than an instruction.
+const resumeSym = "_Unwind_Resume"
+
 // callsAggregateOnStack reports whether in is a call that puts a byval
 // aggregate in the outgoing area rather than in registers.
 //
@@ -38,7 +42,7 @@ const memcpySym = "memcpy"
 // instruction to name in the message.
 func callsAggregateOnStack(in *ir.Inst, opts Options) bool {
 	switch in.Op().Verb {
-	case ir.VCall, ir.VCallInd:
+	case ir.VCall, ir.VCallInd, ir.VInvoke, ir.VInvokeInd:
 	default:
 		return false
 	}
@@ -79,6 +83,9 @@ func libcallSyms(m *ir.Module, opts Options) []string {
 				// is no verb for it — the classification decides, so the
 				// classification is what has to be asked.
 				add(memcpySym)
+			}
+			if in.Op().Verb == ir.VResume {
+				add(resumeSym)
 			}
 			switch in.Op().Verb {
 			case ir.VAlloc, ir.VAlloca:
@@ -134,5 +141,5 @@ func emitLibcall(c *cursor, vr *vregs, sym string, opts Options, args []mir.VReg
 		}
 		places[i] = place{kind: placeInt, i: i, w: w}
 	}
-	return emitCallSeq(c, vr, places, args, nil, nil, callOp{sym: opts.LibcallPrefix + sym}, opts, nil, -1)
+	return emitCallSeq(c, vr, places, args, nil, nil, callOp{sym: opts.LibcallPrefix + sym}, opts, nil, -1, -1)
 }

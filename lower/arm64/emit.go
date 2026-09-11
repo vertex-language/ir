@@ -16,7 +16,7 @@ import (
 // position the assembler gave it rather than becoming a sticky module error
 // with a section offset for a location.
 func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func,
-	assigned map[mir.VReg]regalloc.PhysReg, fr *frame, sv saves) error {
+	assigned map[mir.VReg]regalloc.PhysReg, fr *frame, sv saves, plan *ehPlan) error {
 
 	x := func(v mir.VReg) reg.X { return reg.X(assigned[v]) }
 	w := func(v mir.VReg) reg.W { return reg.W(assigned[v]) }
@@ -40,6 +40,9 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 		switch {
 		case i == 0:
 			text.Label(fn.Name(), funcBinding(fn), arm64asm.Func)
+			if plan != nil {
+				plan.start = uint32(text.Offset())
+			}
 			emitPrologue(text, fr, sv)
 		case labeled[mb.Label]:
 			text.Label(mb.Label, arm64asm.Local)
@@ -169,6 +172,24 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 
 			case addImmOp:
 				text.AddImm64(x(in.Defs[0]), x(in.Uses[0]), op.imm)
+
+			case siteOp:
+				// Nothing is emitted: the mark is the offset itself,
+				// which is what an invoke's call-site entry names.
+				if plan != nil {
+					s := plan.sites[op.site]
+					if op.end {
+						s.end, s.closed = uint32(text.Offset())-plan.start, true
+					} else {
+						s.begin = uint32(text.Offset()) - plan.start
+					}
+				}
+
+			case padEntryOp:
+				if plan != nil {
+					pad := plan.pads[op.pad]
+					pad.at, pad.found = uint32(text.Offset())-plan.start, true
+				}
 
 			case frameOp:
 				emitFrameAddr(text, x(in.Defs[0]), fr.local(op.off))
@@ -366,6 +387,11 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 			}
 		}
 		_ = vreg
+	}
+	if plan != nil {
+		// The end of the code, not the end of what follows it: a jump
+		// table is data, and no return address is ever inside one.
+		plan.end = uint32(text.Offset()) - plan.start
 	}
 	text.EndLabel(fn.Name())
 

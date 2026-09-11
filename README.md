@@ -266,7 +266,7 @@ else.
 | §E bulk memory | ✅ non-`volatile` | ✅ non-`volatile` | ✅ non-`volatile` |
 | §F select | ✅ | ✅ | ✅ |
 | §G · §G2 calls, terminators, computed branches | ✅ | ✅ | ✅ |
-| §G3 unwinding — `invoke`, `invokeind`, `resume` | — | — | — |
+| §G3 unwinding — `invoke`, `invokeind`, `resume` | — | Mach-O | — |
 | §G4 inline assembly | — | — | — |
 | §H atomics | ✅ | ✅ | ✅ |
 | §I variadics | ✅ ¹ | Apple's variant only ² | ✅ |

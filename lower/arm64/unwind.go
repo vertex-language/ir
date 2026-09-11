@@ -215,16 +215,46 @@ func unwindEncoding(fr *frame, sv saves) uint32 {
 // function, the personality routine and the LSDA are addresses, and an
 // address is not something this layer knows. The length is not — it is the
 // distance between two offsets in a section being built, which is a number.
-func emitCompactUnwind(am *arm64asm.Module, fn string, enc, length uint32, lsda string) {
+func emitCompactUnwind(am *arm64asm.Module, fn string, enc, length uint32, personality, lsda string) {
+	if lsda != "" {
+		enc |= unwindHasLSDA
+	}
 	s := am.SectionNamed(compactUnwindSection, arm64asm.Data)
 	s.Align(8)
 	s.Ref(fn, arm64asm.RefAbs64)
 	s.Long(length)
 	s.Long(enc)
-	s.Quad(0) // the personality routine; see lsda.go when there is one
+	// The personality's index in the image's array of them is two bits of
+	// the encoding, and the linker fills them in: it is the one that knows
+	// how many distinct personalities the image ended up with.
+	if personality == "" {
+		s.Quad(0)
+	} else {
+		s.Ref(personality, arm64asm.RefAbs64)
+	}
 	if lsda == "" {
 		s.Quad(0)
 		return
 	}
 	s.Ref(lsda, arm64asm.RefAbs64)
+}
+
+// personalitySyms is every personality routine the module names and does not
+// itself define, which have to be declared before anything references one.
+func personalitySyms(m *ir.Module) []string {
+	defined := make(map[string]bool)
+	for _, fn := range m.Funcs() {
+		defined[fn.Name()] = true
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, fn := range m.Funcs() {
+		p := fn.PersonalityFn()
+		if p == nil || defined[p.Name()] || seen[p.Name()] {
+			continue
+		}
+		seen[p.Name()] = true
+		out = append(out, p.Name())
+	}
+	return out
 }
