@@ -752,11 +752,83 @@ func (x *fn) store(in *ir.Inst) error {
 
 // provenance is the state space an address is known to be in, and the
 // operand that addresses it there. A generic pointer answers NoSpace and
-// itself. The address of a global, possibly plus a constant, answers the
-// global's space and the symbol plus offset — the fold that turns a
-// tile[ty][tx] into ld.shared.
+// itself. The address of a global answers the global's space and the
+// symbol — plus a constant where one was added, or through cvta.to where
+// a value was, which is the fold that turns a tile[ty][tx] into
+// ld.shared. A shared or global access through its own space skips the
+// aperture check every generic access pays.
 func (x *fn) provenance(p *ir.Def) (ptx.Space, ptx.Mem) {
-	return ptx.NoSpace, ptx.At(x.v(p))
+	v, off, ok := x.symbolic(p, 0)
+	switch {
+	case !ok:
+		return ptx.NoSpace, ptx.At(x.v(p))
+	case v != nil:
+		return v.Space, ptx.At(v, off)
+	}
+	// A symbol's space with a variable offset: the generic pointer,
+	// converted back into the space it came from.
+	sp := x.spaceOf(p)
+	t := x.temp(ptx.B64)
+	x.b.Cvta(ptx.U64, t, x.v(p), sp, ptx.To)
+	return sp, ptx.At(t)
+}
+
+// symbolic follows ptr.add chains back to a ptr.getaddr. It answers the
+// global and the constant offset where the whole chain is constant, a nil
+// global with ok where some step was a value, and !ok for anything else.
+func (x *fn) symbolic(p *ir.Def, depth int) (v *ptx.Var, off int64, ok bool) {
+	in := p.Inst()
+	if in == nil || depth > 8 {
+		return nil, 0, false
+	}
+	switch in.Op().Verb {
+	case ir.VGetAddr:
+		v, ok := x.l.vars[in.Symbol()]
+		if !ok || v.Linkage == ptx.Extern {
+			return nil, 0, false
+		}
+		return v, 0, true
+	case ir.VAdd, ir.VSub:
+		if in.Op().Type != ir.TypePtr {
+			return nil, 0, false
+		}
+		v, off, ok := x.symbolic(in.Arg(0), depth+1)
+		if !ok {
+			return nil, 0, false
+		}
+		c, isConst := constOf(in.Arg(1))
+		if !isConst || v == nil {
+			return nil, 0, true
+		}
+		if in.Op().Verb == ir.VSub {
+			c = -c
+		}
+		return v, off + c, true
+	}
+	return nil, 0, false
+}
+
+// spaceOf is the space symbolic found, for the variable-offset case.
+func (x *fn) spaceOf(p *ir.Def) ptx.Space {
+	for in := p.Inst(); in != nil; in = in.Arg(0).Inst() {
+		if in.Op().Verb == ir.VGetAddr {
+			return x.l.vars[in.Symbol()].Space
+		}
+	}
+	return ptx.NoSpace
+}
+
+// constOf is a value's integer literal, where it is an i64.const.
+func constOf(d *ir.Def) (int64, bool) {
+	in := d.Inst()
+	if in == nil || in.Op().Verb != ir.VConst {
+		return 0, false
+	}
+	lit, _ := in.Lit()
+	if lit.Kind() != ir.ConstInt {
+		return 0, false
+	}
+	return lit.Int(), true
 }
 
 // zero writes n zero bytes at p: the zeroed form of ptr.alloc.

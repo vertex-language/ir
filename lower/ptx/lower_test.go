@@ -120,3 +120,42 @@ $L_done:
 }
 `)
 }
+
+// A shared global addressed three ways: by symbol, by symbol plus a
+// constant, and by symbol plus a value — the last through cvta.to.
+func TestSharedFold(t *testing.T) {
+	m := ir.NewModule("fold", ir.NVPTX64)
+	tile := m.Global("tile", ir.Shared, ir.Array(64, ir.StoreF32.FType())).Align(16)
+	fn := m.Func("k").Export().CallConv(ir.Kernel)
+	entry := fn.Entry()
+	base := entry.Ptr.GetAddr(tile)
+	one := entry.F32.Const(1)
+	entry.F32.Store(one, base)
+	entry.F32.Store(one, entry.Ptr.Add(base, entry.I64.Const(8)))
+	tid := entry.I32.WorkitemID(ir.X)
+	entry.F32.Store(one, entry.Ptr.Add(base, entry.I64.Shl(entry.I64.ZExtI32(tid), entry.I64.Const(2))))
+	entry.Return()
+	src := lowerText(t, m, lower.Options{SM: ptx.SM75})
+	body := src[strings.Index(src, "$L_entry:"):]
+	same(t, body, `
+$L_entry:
+	mov.u64                 %rd2, tile;
+	cvta.shared.u64         %rd1, %rd2;
+	mov.f32                 %f1, 0f3F800000;
+	st.shared.f32           [tile], %f1;
+	mov.b64                 %rd3, 8;
+	add.s64                 %rd4, %rd1, %rd3;
+	st.shared.f32           [tile+8], %f1;
+	mov.u32                 %r1, %tid.x;
+	cvt.u64.u32             %rd5, %r1;
+	mov.b64                 %rd6, 2;
+	and.b64                 %rd8, %rd6, 63;
+	cvt.u32.u64             %r2, %rd8;
+	shl.b64                 %rd7, %rd5, %r2;
+	add.s64                 %rd9, %rd1, %rd7;
+	cvta.to.shared.u64      %rd10, %rd9;
+	st.shared.f32           [%rd10], %f1;
+	ret;
+}
+`)
+}
