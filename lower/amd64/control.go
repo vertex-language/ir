@@ -503,6 +503,17 @@ func iselReturn(fn *ir.Func, c *cursor, vr *vregs, term *ir.Inst) error {
 					} else {
 						dst = vr.physical(intRetReg(abi, slot.i), slot.w)
 					}
+					if slot.bytes != 0 && slot.bytes < 8 && k == 0 {
+						// A slot narrower than the register: read its
+						// bytes and no more, zero-extended.
+						c.Emit(mir.Instr{
+							Op:   extLoadOp{from: access(slot.bytes), w: slot.w},
+							Defs: []mir.VReg{dst},
+							Uses: []mir.VReg{v},
+						})
+						uses = append(uses, dst)
+						continue
+					}
 					c.Emit(mir.Instr{
 						Op:   loadAtOp{off: int32(k * 8), w: slot.w},
 						Defs: []mir.VReg{dst},

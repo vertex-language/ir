@@ -1038,6 +1038,15 @@ func iselCallSeq(c *cursor, vr *vregs, what string, spec []abiArg, sig *ir.Sig, 
 					src = site.intReg(intRetReg(abi, slot.i), slot.w)
 				}
 				// Address first, value second, which is this op's order.
+				if slot.bytes != 0 && slot.bytes < 8 && k == 0 {
+					// The low bytes of the register, into storage no
+					// wider than they are.
+					c.Emit(mir.Instr{
+						Op:   subStoreOp{to: access(slot.bytes)},
+						Uses: []mir.VReg{src, dst},
+					})
+					continue
+				}
 				c.Emit(mir.Instr{
 					Op:   storeAtOp{off: int32(k * 8), w: slot.w},
 					Uses: []mir.VReg{dst, src},

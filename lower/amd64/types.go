@@ -453,6 +453,13 @@ type regSlot struct {
 	kind placeKind
 	i    int
 	w    width
+
+	// bytes is how many bytes of the register the slot carries when that
+	// is fewer than the width says: a two-byte aggregate comes back in
+	// the low two bytes of RAX, and its storage is two bytes wide, so the
+	// caller's store and the callee's load are that wide too. Zero means
+	// the whole width.
+	bytes uint64
 }
 
 // A place is where SysV puts one argument: kind says which of the two

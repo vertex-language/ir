@@ -318,9 +318,15 @@ func msSretInRegs(t ir.FType) (aggregate, bool, error) {
 }
 
 // msSretRetSlots is sretRetSlots for this ABI: the one register a small
-// aggregate comes back in.
-func msSretRetSlots(aggregate) []regSlot {
-	return []regSlot{{kind: placeInt, i: 0, w: w64}}
+// aggregate comes back in, and how much of it the aggregate is -- a
+// four-byte struct is the low four bytes of RAX, and the storage it goes
+// to is four bytes wide.
+func msSretRetSlots(agg aggregate) []regSlot {
+	slot := regSlot{kind: placeInt, i: 0, w: w64}
+	if agg.size < 8 {
+		slot.bytes = agg.size
+	}
+	return []regSlot{slot}
 }
 
 // classifyMSRet places a call's results. This ABI returns one value, in
