@@ -41,7 +41,38 @@ func (o Ordering) strength() int {
 	return -1
 }
 
-// A FenceOpt is an option on fence.
+// A Scope is §H's sync scope: the set of threads an ordering is promised
+// against. A CPU has one, and every existing module means it, so an
+// atomic or a fence that states none means System. A GPU has three, and
+// the difference is the cache level a release has to write back to.
+type Scope uint8
+
+const (
+	NoScope   Scope = iota // absent: System
+	Workgroup              // the work-items of one workgroup
+	Device                 // every work-item on the device
+	System                 // the device and the host; a CPU's only scope
+)
+
+var scopeText = [...]string{
+	NoScope: "", Workgroup: "workgroup", Device: "device", System: "system",
+}
+
+func (s Scope) String() string {
+	if int(s) < len(scopeText) {
+		return scopeText[s]
+	}
+	return "<invalid scope>"
+}
+
+// The scope attributes an atomic access takes, alongside Volatile.
+var (
+	WorkgroupScope = MemAttr{scope: Workgroup}
+	DeviceScope    = MemAttr{scope: Device}
+	SystemScope    = MemAttr{scope: System}
+)
+
+// A FenceOpt is an option on fence: singlethread, or one of the scopes.
 type FenceOpt uint8
 
 // SingleThread makes a fence a compiler barrier and nothing else. It orders this
@@ -52,6 +83,15 @@ type FenceOpt uint8
 // alternative frontends reach for instead, asm volatile ("" ::: "memory"), is
 // opaque to the optimizer in ways a fence is not.
 const SingleThread FenceOpt = 1
+
+// The scoped fences. A fence states singlethread or a scope, not both:
+// singlethread is the scope of one thread, which is what makes it a
+// compiler barrier and nothing else.
+const (
+	FenceWorkgroup FenceOpt = 2 + iota
+	FenceDevice
+	FenceSystem
+)
 
 // Atomic accesses assume natural alignment for their width and trap otherwise.
 // An align attribute does not weaken this — a misaligned atomic is not atomic on
@@ -67,6 +107,14 @@ func (b *Builder) atomicAttrs(op Op, o Ordering, attrs []MemAttr) *imm {
 	for _, a := range attrs {
 		if a.volatile {
 			im.volatile = true
+			continue
+		}
+		if a.scope != NoScope {
+			if im.scope != NoScope && im.scope != a.scope {
+				b.fail(op, ErrOrdering, "scopes %s and %s both stated", im.scope, a.scope)
+				return nil
+			}
+			im.scope = a.scope
 			continue
 		}
 		if a.align != 0 {
@@ -191,6 +239,18 @@ func (n I32NS) AtomicRmwXor(v I32, dst Ptr, o Ordering, a ...MemAttr) I32 {
 func (n I32NS) AtomicRmwXchg(v I32, dst Ptr, o Ordering, a ...MemAttr) I32 {
 	return I32{n.b.atomicRmw(TypeI32, VAtomicRmwXchg, v.d, dst.d, o, a)}
 }
+func (n I32NS) AtomicRmwSMin(v I32, dst Ptr, o Ordering, a ...MemAttr) I32 {
+	return I32{n.b.atomicRmw(TypeI32, VAtomicRmwSMin, v.d, dst.d, o, a)}
+}
+func (n I32NS) AtomicRmwSMax(v I32, dst Ptr, o Ordering, a ...MemAttr) I32 {
+	return I32{n.b.atomicRmw(TypeI32, VAtomicRmwSMax, v.d, dst.d, o, a)}
+}
+func (n I32NS) AtomicRmwUMin(v I32, dst Ptr, o Ordering, a ...MemAttr) I32 {
+	return I32{n.b.atomicRmw(TypeI32, VAtomicRmwUMin, v.d, dst.d, o, a)}
+}
+func (n I32NS) AtomicRmwUMax(v I32, dst Ptr, o Ordering, a ...MemAttr) I32 {
+	return I32{n.b.atomicRmw(TypeI32, VAtomicRmwUMax, v.d, dst.d, o, a)}
+}
 
 // The narrow forms return the old value, zero-extended.
 func (n I32NS) AtomicRmwAdd8(v I32, dst Ptr, o Ordering, a ...MemAttr) I32 {
@@ -267,6 +327,31 @@ func (n I64NS) AtomicRmwXor(v I64, dst Ptr, o Ordering, a ...MemAttr) I64 {
 func (n I64NS) AtomicRmwXchg(v I64, dst Ptr, o Ordering, a ...MemAttr) I64 {
 	return I64{n.b.atomicRmw(TypeI64, VAtomicRmwXchg, v.d, dst.d, o, a)}
 }
+func (n I64NS) AtomicRmwSMin(v I64, dst Ptr, o Ordering, a ...MemAttr) I64 {
+	return I64{n.b.atomicRmw(TypeI64, VAtomicRmwSMin, v.d, dst.d, o, a)}
+}
+func (n I64NS) AtomicRmwSMax(v I64, dst Ptr, o Ordering, a ...MemAttr) I64 {
+	return I64{n.b.atomicRmw(TypeI64, VAtomicRmwSMax, v.d, dst.d, o, a)}
+}
+func (n I64NS) AtomicRmwUMin(v I64, dst Ptr, o Ordering, a ...MemAttr) I64 {
+	return I64{n.b.atomicRmw(TypeI64, VAtomicRmwUMin, v.d, dst.d, o, a)}
+}
+func (n I64NS) AtomicRmwUMax(v I64, dst Ptr, o Ordering, a ...MemAttr) I64 {
+	return I64{n.b.atomicRmw(TypeI64, VAtomicRmwUMax, v.d, dst.d, o, a)}
+}
+
+// —— f32, f64 ——
+//
+// One row each: the atomic float add every GPU has an instruction for.
+// There is no float min or max here because PTX has none, and a verb
+// that is a compare-and-swap loop on one target is the loop spelled out.
+
+func (n F32NS) AtomicRmwAdd(v F32, dst Ptr, o Ordering, a ...MemAttr) F32 {
+	return F32{n.b.atomicRmw(TypeF32, VAtomicRmwAdd, v.d, dst.d, o, a)}
+}
+func (n F64NS) AtomicRmwAdd(v F64, dst Ptr, o Ordering, a ...MemAttr) F64 {
+	return F64{n.b.atomicRmw(TypeF64, VAtomicRmwAdd, v.d, dst.d, o, a)}
+}
 func (n I64NS) AtomicCas(expect, new I64, dst Ptr, succ, fail Ordering, a ...MemAttr) I64 {
 	return I64{n.b.atomicCas(TypeI64, VAtomicCas, expect.d, new.d, dst.d, succ, fail, a)}
 }
@@ -306,9 +391,20 @@ func (b *Builder) Fence(o Ordering, opts ...FenceOpt) {
 	im.ord[0] = o
 	im.nord = 1
 	for _, x := range opts {
-		if x == SingleThread {
+		switch x {
+		case SingleThread:
 			im.single = true
+		case FenceWorkgroup:
+			im.scope = Workgroup
+		case FenceDevice:
+			im.scope = Device
+		case FenceSystem:
+			im.scope = System
 		}
+	}
+	if im.single && im.scope != NoScope {
+		b.fail(op, ErrOrdering, "singlethread and %s scope both stated", im.scope)
+		return
 	}
 	b.voidi(op, nil, im)
 }

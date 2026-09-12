@@ -203,6 +203,10 @@ type imm struct {
 	ord    [2]Ordering
 	nord   int
 	single bool
+	scope  Scope
+
+	axis    Axis // §W's literal axis
+	hasAxis bool
 
 	asm *Asm
 }
@@ -354,6 +358,23 @@ func (in *Inst) Orderings() []Ordering {
 // SingleThread reports whether a fence is a compiler barrier — C11's
 // atomic_signal_fence, which emits no machine barrier.
 func (in *Inst) SingleThread() bool { return in.im != nil && in.im.single }
+
+// Scope returns the sync scope a fence or an atomic states, or NoScope
+// where it states none — which means System, the only scope a CPU has.
+func (in *Inst) Scope() Scope {
+	if in.im == nil {
+		return NoScope
+	}
+	return in.im.scope
+}
+
+// Axis returns a §W verb's literal axis and whether the verb takes one.
+func (in *Inst) Axis() (Axis, bool) {
+	if in.im == nil {
+		return 0, false
+	}
+	return in.im.axis, in.im.hasAxis
+}
 
 // Asm returns the inline-assembly payload.
 func (in *Inst) Asm() *Asm {

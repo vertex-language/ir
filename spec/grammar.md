@@ -223,7 +223,7 @@ permitted on them.
 ```ebnf
 global-decl        ::= linkage? visibility? binding? "global" domain GlobalName
                         ftype global-placement* "=" init meta*
-domain             ::= "ro" | "rw" | "tls"
+domain             ::= "ro" | "rw" | "tls" | "shared"
 global-placement   ::= "section"  string
                      | "comdat"   string?
                      | "align"    unsigned
@@ -254,6 +254,13 @@ one assemble-time-known displacement. `&arr[3]` is written
 `@arr + offsetof @ArrTy [3]`; no multiplication is required or provided.
 
 A `comdat` with no key defaults to the declared symbol's own name.
+
+`shared` is workgroup-local storage: one instance per workgroup, for the
+workgroup's lifetime, reachable by every work-item in it and by nothing
+outside. It is CUDA's `__shared__`, PTX's `.shared`, AMDGPU's LDS. Its
+initializer is `zeroed` and nothing else (§19.21), and it takes no `comdat`,
+`common`, or `tlsmodel`. On a target with no workgroups it is refused by name,
+as `tls` is on a target with no threads.
 
 ## 5b. Aliases
 
@@ -296,8 +303,16 @@ ret-attr           ::= "zext" | "sext"
 
 callconv           ::= "ccc" | "fastcc" | "preserve_most" | "preserve_all"
                      | "stdcall" | "fastcall" | "thiscall" | "vectorcall"
-                     | "ms_abi"  | "sysv_abi"
+                     | "ms_abi"  | "sysv_abi" | "kernel"
 ```
+
+**`kernel` is a GPU entry point** — the function a host launches over a grid
+of work-items (§W). It is a calling convention because it is one: the
+parameters arrive in the kernel-argument buffer rather than in registers, the
+function returns nothing, and nothing on the device can call it or take its
+address. §19.20 states those as rules. It is CUDA's `__global__`, PTX's
+`.entry`, and an AMDGPU kernel descriptor.
+
 
 An import carries `visibility` and `weak` because both are facts about the
 reference, not the definition: `dllimport` describes how this module reaches a
@@ -387,11 +402,13 @@ instruction  ::= ( inst-unary   | inst-binary  | inst-ternary | inst-const
                  | inst-atomic-rmw   | inst-atomic-cas | inst-fence
                  | inst-call    | inst-callind
                  | inst-asm
-                 | inst-vaarg   | inst-vaargref | inst-vamanage ) meta*
+                 | inst-vaarg   | inst-vaargref | inst-vamanage
+                 | inst-workitem | inst-wave | inst-barrier ) meta*
 
 mem-attr     ::= "align" unsigned | "volatile"
 ordering     ::= "unordered" | "monotonic" | "acquire" | "release"
                | "acq_rel"   | "seq_cst"
+scope        ::= "workgroup" | "device" | "system"
 literal      ::= int | float | symconst
 symconst     ::= "sizeof"   ( TypeName | GlobalName )
                | "alignof"  ( TypeName | GlobalName )
@@ -453,6 +470,9 @@ ternary-verb  ::= float-ternary | select-verb
 int-unary     ::= "i32.neg" | "i64.neg"
 float-unary   ::= float-ns "." ( "neg" | "abs" | "sqrt"
                                 | "ceil" | "floor" | "trunc" | "nearest" )
+                | "f32." ( "rcp_approx" | "rsqrt_approx"
+                         | "exp2_approx" | "log2_approx"
+                         | "sin_approx"  | "cos_approx" )
 float-ns      ::= "f32" | "f64" | ext-float
 not-verb      ::= "i1.not" | "i32.not" | "i64.not"
 bitcount-verb ::= ( "i32" | "i64" ) "." ( "clz" | "ctz" | "popcnt" | "bswap" )
@@ -549,25 +569,28 @@ inst-bulk   ::= ( "memcpy"  register "," register "," register
 
 ```ebnf
 inst-atomic-load   ::= register "=" atomic-load-verb register ordering
-                        "volatile"?
+                        scope? "volatile"?
 inst-atomic-store  ::= atomic-store-verb register "," register ordering
-                        "volatile"?
+                        scope? "volatile"?
 inst-atomic-rmw    ::= register "=" rmw-verb register "," register ordering
-                        "volatile"?
+                        scope? "volatile"?
 inst-atomic-cas    ::= register "=" cas-verb register "," register ","
-                        register ordering ordering "volatile"?
-inst-fence         ::= "fence" ordering "singlethread"?
+                        register ordering ordering scope? "volatile"?
+inst-fence         ::= "fence" ordering ( "singlethread" | scope )?
 
 narrow             ::= "8" | "16"
 rmw-op             ::= "add" | "sub" | "and" | "or" | "xor" | "xchg"
+minmax-op          ::= "smin" | "smax" | "umin" | "umax"
 
 atomic-load-verb   ::= ( "i32" | "i64" | "ptr" ) ".atomic_load"
                      | "i32" ".atomic_uload" narrow
 atomic-store-verb  ::= ( "i32" | "i64" | "ptr" ) ".atomic_store"
                      | "i32" ".atomic_store" narrow
 rmw-verb           ::= ( "i32" | "i64" ) ".atomic_rmw" rmw-op
+                     | ( "i32" | "i64" ) ".atomic_rmw" minmax-op
                      | "i32" ".atomic_rmw" rmw-op narrow
                      | "ptr" ".atomic_rmw" ( "add" | "sub" | "xchg" )
+                     | ( "f32" | "f64" ) ".atomic_rmwadd"
 cas-verb           ::= ( "i32" | "i64" | "ptr" ) ".atomic_cas"
                      | "i32" ".atomic_cas" narrow
 ```
@@ -584,6 +607,35 @@ an ordinary `fence` is a correctness-preserving pessimization on every use, and
 the alternative every frontend reaches for, `asm volatile ("" ::: "memory")`,
 is opaque to the optimizer in ways a fence is not. The token is optional and
 appears on `fence` alone; no access carries it.
+
+**A `scope` is the set of threads an ordering is promised against**, and
+absent one it is `system` — the only scope a CPU has. `singlethread` and a
+scope are alternatives on `fence`: the first is the scope of one thread,
+which is what makes it a compiler barrier and nothing else.
+
+## 12b. Work-items
+
+```ebnf
+inst-workitem ::= register "=" workitem-verb axis?
+workitem-verb ::= "i32." ( "workitem_id" | "workgroup_id"
+                         | "workgroup_size" | "num_workgroups" )
+                | "i32." ( "lane_id" | "wave_size" )
+axis          ::= "x" | "y" | "z"
+
+inst-wave     ::= register "=" "i32." ( "wave_shfl_idx" | "wave_shfl_up"
+                                       | "wave_shfl_down" | "wave_shfl_xor" )
+                    register "," register "," register
+                | register "=" "i32.wave_readfirstlane" register
+                | register "=" "i64.wave_ballot" register "," register
+                | register "=" "i1." ( "wave_any" | "wave_all" )
+                    register "," register
+
+inst-barrier  ::= "barrier"
+```
+
+The first four `workitem-verb`s take an `axis`; the last two take none. The
+axis is a literal because the hardware's is: there is no register that
+holds "which axis", only three of each register.
 
 ## 13. Calls
 
@@ -706,7 +758,7 @@ bare set, for reference:
 br  brif  br_table  brind  return  trap  resume
 call  callind  invoke  invokeind
 asm
-fence
+fence  barrier
 memcpy  memmove  memset  memcmp
 va_start  va_end  va_copy
 ```
@@ -720,13 +772,14 @@ None of the following requires a grammar change beyond the noted production.
 
 | Axis | Arrival |
 | --- | --- |
-| Atomic min/max | `rmw-op` gains `smin`, `smax`, `umin`, `umax`. |
 | Atomic nand | `rmw-op` gains `nand`. |
 | Sub-word / pointer atomic coverage | New `rmw-verb` and `cas-verb` rows; no production shape changes. |
 | Function memory effects | `func-placement` and `import-placement` gain members (`readnone`, `readonly`, `argmemonly`). |
 | Pointer parameter facts | `param-attr` gains members (`nonnull`, `dereferenceable`, `align`). |
 | Tail calls | `inst-call` gains a `"tail"?`. |
-| Named sync scopes | `"singlethread"` generalizes to a named-scope token on `inst-fence`. |
+| Half floats | `reg-type` and `store-type` gain `f16` / `bf16`; `layout` gains an attribute admitting them. |
+| Dynamic workgroup storage | An `import-decl` of a `shared` global with `[0]` length; `workitem-verb` gains `dynamic_shared_size`. |
+| Address-space attributes | `mem-attr` gains `"space" ident`. |
 | New metadata kinds | New `!ident` names; no production changes. |
 | Wider extended floats | `ext-float` gains a member; `layout`'s `extfloat` attribute admits it. |
 
@@ -793,3 +846,11 @@ The grammar admits these; a verifier rejects them.
     this, since `naked` is a `func-placement` and the body is a separate
     production; a `naked` function with blocks would be asking a backend to
     lower instructions into a function with no frame to lower them against.
+20. A `kernel` signature has no `ret`, no `var-tail`, and no `byval` or
+    `sret` parameter; a `kernel` function is a definition, not an import,
+    and is not `naked`; no `ptr.getaddr`, `call`, or `invoke` names a
+    `kernel`. A kernel is launched by the host over a grid; its parameters
+    arrive in the kernel-argument buffer, it has no caller to return to, and
+    nothing on the device can reach it.
+21. A `shared` global's initializer is `zeroed`. Workgroup storage begins
+    when the workgroup does and nothing can fill it sooner.

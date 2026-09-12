@@ -8,6 +8,16 @@ const (
 	RO Domain = iota + 1
 	RW
 	TLS
+
+	// Shared is workgroup-local storage: one instance per workgroup, for
+	// the workgroup's lifetime, readable and writable by every work-item
+	// in it and by nothing outside it. It is CUDA's __shared__ and HIP's,
+	// PTX's .shared and AMDGPU's LDS. A shared global is zeroed and
+	// nothing else (§19.21): neither target can initialize the storage
+	// before the workgroup starts, and a rule that admitted an initializer
+	// one target had to emulate would be a store the frontend did not
+	// write.
+	Shared
 )
 
 func (d Domain) String() string {
@@ -18,6 +28,8 @@ func (d Domain) String() string {
 		return "rw"
 	case TLS:
 		return "tls"
+	case Shared:
+		return "shared"
 	}
 	return "<invalid domain>"
 }
@@ -246,7 +258,13 @@ func (g *Global) Common() *Global {
 func (g *Global) Section(s string) *Global { g.section = s; return g }
 
 // Comdat sets the comdat key. With no key it defaults to the symbol's own name.
+// A shared global is a workgroup's storage rather than a linker's symbol
+// and takes no comdat.
 func (g *Global) Comdat(key ...string) *Global {
+	if g.domain == Shared {
+		g.m.failModule(ErrPlacement, "comdat on @%s in domain shared", g.name)
+		return g
+	}
 	g.hasComdat = true
 	if len(key) > 0 {
 		g.comdat = key[0]

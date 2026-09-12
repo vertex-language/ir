@@ -16,13 +16,20 @@ const (
 	VectorCall
 	MSABI
 	SysVABI
+
+	// Kernel is a GPU entry point: the function a host launches over a
+	// grid of work-items. It is a convention and not a placement because
+	// it is one — the parameters arrive in the kernel-argument buffer
+	// rather than in registers, nothing on the device can call it, and it
+	// returns nothing. §19.20 states those three as rules.
+	Kernel
 )
 
 var callConvText = [...]string{
 	CCC: "ccc", FastCC: "fastcc", PreserveMost: "preserve_most",
 	PreserveAll: "preserve_all", StdCall: "stdcall", FastCall: "fastcall",
 	ThisCall: "thiscall", VectorCall: "vectorcall", MSABI: "ms_abi",
-	SysVABI: "sysv_abi",
+	SysVABI: "sysv_abi", Kernel: "kernel",
 }
 
 func (c CallConv) String() string {

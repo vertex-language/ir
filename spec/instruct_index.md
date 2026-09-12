@@ -2,9 +2,9 @@
 
 Normative on instruction shape, operand types, and result types.
 
-Sections run §0, §A–§I, §V, §K and §L. There is no §J; the letter is unassigned and
-reserved, so that a citation to `§K` in an older document still means what it
-meant.
+Sections run §0, §A–§I, §V, §W, §K and §L. There is no §J; the letter is
+unassigned and reserved, so that a citation to `§K` in an older document still
+means what it meant.
 
 ## 0. Global Rules
 
@@ -52,6 +52,17 @@ anywhere; only its lowering differs.
 
 **Pointer width.** `ptr` is `ptrbits` wide, from the `layout` block. `ptr.add`
 and `ptr.sub` wrap modulo `2^ptrbits`.
+
+**Sync scopes.** An atomic access or a `fence` may state the set of threads its
+ordering is promised against: `workgroup`, `device`, or `system`. Absent a
+scope, the promise is `system` — the only scope a CPU has, and therefore what
+every module written before scopes existed already meant. A target with one
+scope treats every scope as that one. See §H.
+
+**Work-items.** §W applies to every target. A target that runs one thread per
+function call — every CPU — refuses each §W verb by name at lowering; nothing
+about a module's `layout` block admits or rejects them, because they describe
+how a function is *launched* and not what registers it has.
 
 ## A. Integer Arithmetic
 
@@ -141,6 +152,12 @@ given for `f32`/`f64`; the extended namespaces carry the identical verb set.
 | `f64.trunc` | `f64` | `f64` |
 | `f32.nearest` | `f32` | `f32` — round to nearest, ties to even |
 | `f64.nearest` | `f64` | `f64` |
+| `f32.rcp_approx` | `f32` | `f32` — `1/a`, approximate |
+| `f32.rsqrt_approx` | `f32` | `f32` — `1/sqrt(a)`, approximate |
+| `f32.exp2_approx` | `f32` | `f32` — `2^a`, approximate |
+| `f32.log2_approx` | `f32` | `f32` — `log2(a)`, approximate |
+| `f32.sin_approx` | `f32` | `f32` — approximate; argument in radians |
+| `f32.cos_approx` | `f32` | `f32` — approximate; argument in radians |
 
 **`minimum`/`maximum` vs `minnum`/`maxnum`.** The first pair is IEEE-754-2019
 `minimum`/`maximum`: any NaN operand yields NaN. The second is
@@ -153,6 +170,19 @@ Signed zero is fully specified rather than left to the target: `minimum` and
 whose instruction disagrees pays a fixup.
 
 There is no float remainder verb; see §L.
+
+**The approximate six** are the transcendentals that are one instruction on
+every GPU in scope — `rcp.approx`, `rsqrt.approx`, `ex2.approx`, `lg2.approx`,
+`sin.approx`, `cos.approx` on PTX; `v_rcp_f32`, `v_rsq_f32`, `v_exp_f32`,
+`v_log_f32`, `v_sin_f32`, `v_cos_f32` on AMDGPU — and each carries that
+instruction's contract rather than a correctly rounded one: within 2 ULP for
+`rcp`, `rsqrt`, `exp2` and `log2` over the finite normal range, and for `sin`
+and `cos` an absolute error of `2^-21` over `[-π, π]` with the result
+unspecified-but-finite outside it. A target with no such instruction supplies
+the exact answer, which satisfies the contract. They are `f32` only: no GPU
+has a single-instruction `f64` transcendental. They are what `__expf`,
+`__sinf`, `rsqrtf` and `__fdividef` compile to; accurate `sinf` and `expf`
+are a library's, as they are on a CPU.
 
 ## A4. Bitwise
 
@@ -546,7 +576,9 @@ Clobbers admit target register names plus `"memory"` and `"cc"`.
 
 ## H. Atomics
 
-All forms take an explicit `ordering` and an optional `volatile`.
+All forms take an explicit `ordering`, an optional `scope`, and an optional
+`volatile`. `scope` is one of `workgroup`, `device`, `system`; absent, it is
+`system` (§0).
 
 | Instruction | Operands | Result |
 | --- | --- | --- |
@@ -572,6 +604,12 @@ All forms take an explicit `ordering` and an optional `volatile`.
 | `i64.atomic_rmwxor` | `i64, ptr, ordering` | `i64` |
 | `i32.atomic_rmwxchg` | `i32, ptr, ordering` | `i32` |
 | `i64.atomic_rmwxchg` | `i64, ptr, ordering` | `i64` |
+| `i32.atomic_rmwsmin` / `rmwsmax` | `i32, ptr, ordering` | `i32` — signed minimum / maximum, returns old value |
+| `i64.atomic_rmwsmin` / `rmwsmax` | `i64, ptr, ordering` | `i64` |
+| `i32.atomic_rmwumin` / `rmwumax` | `i32, ptr, ordering` | `i32` — unsigned minimum / maximum |
+| `i64.atomic_rmwumin` / `rmwumax` | `i64, ptr, ordering` | `i64` |
+| `f32.atomic_rmwadd` | `f32, ptr, ordering` | `f32` — returns old value; round-to-nearest-even |
+| `f64.atomic_rmwadd` | `f64, ptr, ordering` | `f64` |
 | `i32.atomic_rmw{op}8` | `i32, ptr, ordering` | `i32` — old value, zero-extended |
 | `i32.atomic_rmw{op}16` | `i32, ptr, ordering` | `i32` — old value, zero-extended |
 | `ptr.atomic_rmwadd` | `i64 delta, ptr, ordering` | `ptr` — returns old value |
@@ -582,9 +620,25 @@ All forms take an explicit `ordering` and an optional `volatile`.
 | `ptr.atomic_cas` | `ptr expect, ptr new, ptr, ordering, ordering` | `ptr` |
 | `i32.atomic_cas8` | `i32 expect, i32 new, ptr, ordering, ordering` | `i32` |
 | `i32.atomic_cas16` | `i32 expect, i32 new, ptr, ordering, ordering` | `i32` |
-| `fence` | `ordering`, `singlethread`? | — bare, no type involved |
+| `fence` | `ordering`, (`singlethread` \| `scope`)? | — bare, no type involved |
 
-`{op}` ranges over `add`, `sub`, `and`, `or`, `xor`, `xchg`.
+`{op}` ranges over `add`, `sub`, `and`, `or`, `xor`, `xchg`. The min and max
+rows and the float row have no narrow forms.
+
+**Atomic min and max have verbs; plain min and max do not.** §L's rule is
+that a compare and a select spell the non-atomic case at no cost; the atomic
+case is indivisible and a select-based expansion of it is not equivalent,
+which is the whole reason these four rows exist. There is no float atomic
+min or max: PTX has no such instruction, and a verb that is a
+compare-and-swap loop on one target is the loop, spelled out.
+
+**Scope.** `workgroup` orders against the work-items of one workgroup,
+`device` against every work-item on the device, `system` against the device
+and the host. CUDA's `atomicAdd` is `monotonic device`; `atomicAdd_block` is
+`monotonic workgroup`; `atomicAdd_system` is `monotonic system`;
+`__threadfence()` is `fence seq_cst device`. A scope wider than the one asked
+for is a correct lowering; a narrower one is not, and a target that cannot
+provide the width asked for refuses by name.
 
 Narrow atomics live in the `i32` namespace only. An `i64` set would be reachable
 by zero-extension with no hardware distinction, so it is omitted. `_Atomic(_Bool)`
@@ -738,19 +792,87 @@ The lane index and shuffle pattern are literals because the instructions'
 are. A variable index is a store and a scalar load, which the frontend writes
 where it means it.
 
+## W. Work-items
+
+A kernel (§6, `callconv kernel`) runs once per work-item over a grid the host
+chose: work-items in workgroups, workgroups in a grid, each on three axes.
+The hardware knows where a work-item is; these verbs are how the instruction
+stream asks. They are `i32` verbs with a literal axis, not special registers,
+because this IR has no register that is not a value.
+
+The vocabulary is HSA's — work-item, workgroup, wave — rather than CUDA's,
+because the IR names hardware and both vendors' hardware has these.
+`threadIdx.x` is `i32.workitem_id x`; `blockIdx.x` is `i32.workgroup_id x`;
+`blockDim.x` is `i32.workgroup_size x`; `gridDim.x` is `i32.num_workgroups x`;
+`warpSize` is `i32.wave_size`.
+
+### W1. Identity
+
+| Instruction | Operands | Result |
+| --- | --- | --- |
+| `i32.workitem_id` | axis literal `x`/`y`/`z` | `i32` — index within the workgroup |
+| `i32.workgroup_id` | axis | `i32` — index within the grid |
+| `i32.workgroup_size` | axis | `i32` — work-items per workgroup |
+| `i32.num_workgroups` | axis | `i32` — workgroups in the grid |
+| `i32.lane_id` | — | `i32` — index within the wave |
+| `i32.wave_size` | — | `i32` — work-items per wave |
+
+`wave_size` is a verb rather than a constant because it is 32 on one target
+and 32 or 64 on the other, and the module does not know which — the same
+reason `sizeof` is a value. Every row is uniform across a workgroup except
+`workitem_id` and `lane_id`.
+
+### W2. Barrier
+
+| Instruction | Operands | Result |
+| --- | --- | --- |
+| `barrier` | — | — bare |
+
+Every work-item of the workgroup arrives before any leaves, and every memory
+access sequenced before it is visible to every work-item of the workgroup
+after it — a workgroup-scope `acq_rel` fence and a rendezvous, in one. A
+work-item that neither arrives nor exits keeps the others waiting: that is a
+hang, which is a defined behaviour the way an infinite loop is, and the
+reason this needs no undefined case. `__syncthreads()` is `barrier`.
+
+### W3. Wave
+
+The work-items of one wave exchange values without memory. `mask` is the
+member mask — one bit per lane, lane 0 in bit 0 — naming which lanes take
+part; a target whose waves cannot diverge within an instruction reads its
+execution mask instead and the operand is checked to be all-ones or ignored.
+
+| Instruction | Operands | Result |
+| --- | --- | --- |
+| `i32.wave_shfl_idx` | `i32 val, i32 lane, i32 mask` | `i32` — `val` as held by lane `lane` |
+| `i32.wave_shfl_up` | `i32 val, i32 delta, i32 mask` | `i32` — from `delta` lanes below; own value at the edge |
+| `i32.wave_shfl_down` | `i32 val, i32 delta, i32 mask` | `i32` — from `delta` lanes above; own value at the edge |
+| `i32.wave_shfl_xor` | `i32 val, i32 lanemask, i32 mask` | `i32` — from lane `lane_id XOR lanemask` |
+| `i32.wave_readfirstlane` | `i32 val` | `i32` — `val` as the lowest active lane holds it |
+| `i64.wave_ballot` | `i1 c, i32 mask` | `i64` — one bit per lane where `c` holds; zero above the wave width |
+| `i1.wave_any` | `i1 c, i32 mask` | `i1` — `c` holds on some lane in `mask` |
+| `i1.wave_all` | `i1 c, i32 mask` | `i1` — `c` holds on every lane in `mask` |
+
+An `f32` travels through a shuffle as its `bitcast_f32`. `ballot` is `i64`
+because Wave64 exists; a 32-wide target zero-extends.
+
+Every §W verb is refused by name on a target that runs one thread per
+function call.
+
 ## K. Reserved
 
 | Axis | How it arrives |
 | --- | --- |
 | Wider vectors | A `v256` or `v512` `reg-type`, admitted by the `layout` block. §V's shape-prefixed verbs generalize unchanged. |
-| Atomic min/max | `i32.atomic_rmwsmin` and siblings — §H's shape, new verbs. |
 | Atomic nand | `i32.atomic_rmwnand` and siblings — §H's shape, new verbs. |
 | Sub-word and pointer atomic coverage | New rows in §H's existing families. |
 | Wider extended floats | A new `ext-float` member, admitted by the `layout` block. |
 | Function memory effects | New function placements (`readnone`, `readonly`, `argmemonly`). |
 | Pointer parameter facts | New parameter attributes (`nonnull`, `dereferenceable`, `align`). |
 | Tail calls | A modifier on `call`. |
-| Named sync scopes | A generalization of `singlethread` on `fence`. |
+| Half floats | `f16` and `bf16` as namespaces the `layout` block admits, under the same rule as `ext-float`; each pays §C's conversion cost. |
+| Dynamic workgroup storage | An unsized `shared` import and an `i32.dynamic_shared_size` row in §W1. |
+| Address-space attributes | A `space` `mem-attr` naming where an access resolves, for a lowering that can prove nothing from the pointer. |
 | Metadata kinds | New `!ident` names; debug information is the first consumer. |
 
 Each row is additive: a new namespace, a new verb in an existing family, or a
@@ -812,10 +934,34 @@ implicit result on every float instruction in the IR.
 
 **`__builtin_return_address(n)` for n > 0.** See §D3.
 
+**Float atomic min and max, atomic increment-with-wrap.** No instruction on
+one of the two GPU targets; each is a compare-and-swap loop there, and a verb
+would hide the loop from the one caller who cares. See §H.
+
+**A `space` on pointers.** `ptr` is one type and every pointer is generic. A
+pointer to workgroup storage is `ptr.getaddr` of a `shared` global, and a
+load through it is a load; where the provenance is visible, lowering selects
+the direct form, and where it is not, the generic form is right. An address
+space in the type would be a claim the IR could not check. §K reserves an
+access attribute for the case where the frontend knows and the pointer does
+not show it.
+
 **A general constant expression grammar in initializers.** `reloc` admits what
 relocation records admit and no more.
 
 ### Changes from the previous revision
+
+| § | change |
+| --- | --- |
+| head | §W added to the section list |
+| 0 | sync scopes and work-items stated as global rules |
+| A3 | the approximate six, with their contract |
+| H | `scope` on every form and on `fence`; atomic min/max rows; `f32`/`f64` `atomic_rmwadd` |
+| W | new: identity, barrier, wave |
+| K | atomic min/max and named scopes struck (landed); half floats, dynamic workgroup storage, address-space attributes added |
+| L | float atomic min/max, pointer address spaces |
+
+### Changes from the revision before that
 
 | § | change |
 | --- | --- |

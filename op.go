@@ -85,6 +85,17 @@ const (
 	VTrunc    Verb = "trunc"
 	VNearest  Verb = "nearest"
 
+	// §A3's approximate six: the transcendentals that are one instruction
+	// on every GPU in scope, with the loose contract that instruction
+	// gives. A CPU lowers each as the libm call whose exact answer
+	// satisfies it.
+	VRcpApprox   Verb = "rcp_approx"
+	VRsqrtApprox Verb = "rsqrt_approx"
+	VExp2Approx  Verb = "exp2_approx"
+	VLog2Approx  Verb = "log2_approx"
+	VSinApprox   Verb = "sin_approx"
+	VCosApprox   Verb = "cos_approx"
+
 	// §A4 bitwise
 	VNot Verb = "not"
 	VAnd Verb = "and"
@@ -249,6 +260,15 @@ const (
 	VAtomicRmwXor  Verb = "atomic_rmwxor"
 	VAtomicRmwXchg Verb = "atomic_rmwxchg"
 
+	// The atomic minimum and maximum §K reserved. Their non-atomic
+	// counterparts are a compare and a select (§L); these need verbs
+	// because the operation is indivisible and a select-based expansion
+	// is not equivalent.
+	VAtomicRmwSMin Verb = "atomic_rmwsmin"
+	VAtomicRmwSMax Verb = "atomic_rmwsmax"
+	VAtomicRmwUMin Verb = "atomic_rmwumin"
+	VAtomicRmwUMax Verb = "atomic_rmwumax"
+
 	VAtomicRmwAdd8   Verb = "atomic_rmwadd8"
 	VAtomicRmwSub8   Verb = "atomic_rmwsub8"
 	VAtomicRmwAnd8   Verb = "atomic_rmwand8"
@@ -274,6 +294,26 @@ const (
 	VVaCopy   Verb = "va_copy"  // bare
 	VVaArg    Verb = "va_arg"
 	VVaArgRef Verb = "va_arg_ref"
+
+	// §W work-items. The first six read what the hardware knows about the
+	// work-item executing the instruction; the wave verbs exchange values
+	// between the work-items of one wave. barrier is bare.
+	VWorkitemID    Verb = "workitem_id"
+	VWorkgroupID   Verb = "workgroup_id"
+	VWorkgroupSize Verb = "workgroup_size"
+	VNumWorkgroups Verb = "num_workgroups"
+	VLaneID        Verb = "lane_id"
+	VWaveSize      Verb = "wave_size"
+	VBarrier       Verb = "barrier" // bare
+
+	VWaveShflIdx       Verb = "wave_shfl_idx"
+	VWaveShflUp        Verb = "wave_shfl_up"
+	VWaveShflDown      Verb = "wave_shfl_down"
+	VWaveShflXor       Verb = "wave_shfl_xor"
+	VWaveBallot        Verb = "wave_ballot"
+	VWaveAny           Verb = "wave_any"
+	VWaveAll           Verb = "wave_all"
+	VWaveReadFirstLane Verb = "wave_readfirstlane"
 )
 
 // The §V verb set: the v128 namespace's own verbs, spelled shape-first

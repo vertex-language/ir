@@ -42,6 +42,76 @@ func (c *checker) moduleItems(m *ir.Module) {
 			return
 		}
 	}
+	c.kernels(m)
+}
+
+// kernels is §19.20. A kernel is the function a host launches: it takes
+// its parameters from the kernel-argument buffer, returns nothing, and is
+// reached by nothing on the device. The shape rules are checkable at the
+// signature; the reachability rule needs every function's instructions,
+// since a call or a getaddr naming a kernel can be anywhere.
+func (c *checker) kernels(m *ir.Module) {
+	for _, f := range m.FuncImports() {
+		if f.Signature().CallConv() == ir.Kernel {
+			c.failItem(ErrKernel, "import @%s is a kernel; a kernel is a definition, since nothing outside its module launches it by name", f.Name())
+			if c.full() {
+				return
+			}
+		}
+	}
+	for _, f := range m.Funcs() {
+		if f.Signature().CallConv() == ir.Kernel {
+			c.kernelShape(f)
+			if c.full() {
+				return
+			}
+		}
+	}
+	for _, f := range m.Funcs() {
+		var bad bool
+		f.WalkInsts(func(in *ir.Inst) bool {
+			var named ir.Symbol
+			switch in.Op().Verb {
+			case ir.VGetAddr:
+				named = in.Symbol()
+			case ir.VCall, ir.VInvoke:
+				named = in.Callee()
+			default:
+				return true
+			}
+			k, ok := named.(ir.Callee)
+			if !ok || k.Signature().CallConv() != ir.Kernel {
+				return true
+			}
+			c.failItem(ErrKernel, "@%s names the kernel @%s with %s; a kernel is launched by the host and reached by nothing on the device",
+				f.Name(), k.Name(), in.Op())
+			bad = true
+			return false
+		})
+		if bad && c.full() {
+			return
+		}
+	}
+}
+
+func (c *checker) kernelShape(f *ir.Func) {
+	sig := f.Signature()
+	if len(sig.Rets()) != 0 {
+		c.failItem(ErrKernel, "kernel @%s returns %d values; a launch has no caller to return to", f.Name(), len(sig.Rets()))
+	}
+	if sig.IsVariadic() {
+		c.failItem(ErrKernel, "kernel @%s is variadic; a kernel-argument buffer has a fixed layout", f.Name())
+	}
+	if f.IsNaked() {
+		c.failItem(ErrKernel, "kernel @%s is naked; its parameters are loaded from the argument buffer by a prologue", f.Name())
+	}
+	for i, p := range sig.Params() {
+		for _, a := range p.Attrs {
+			if a.IsByVal() || a.IsSRet() {
+				c.failItem(ErrKernel, "kernel @%s parameter %d carries %s; an aggregate kernel argument is by value in the buffer, and its fields are the frontend's to flatten", f.Name(), i, a)
+			}
+		}
+	}
 }
 
 // initializer is §19.10: a global's initializer has the declared type's
@@ -54,6 +124,13 @@ func (c *checker) moduleItems(m *ir.Module) {
 // declines to answer for the easy one. Structure is checkable everywhere,
 // which is what §19.10 asks for.
 func (c *checker) initializer(g *ir.Global) {
+	// §19.21 first: a shared global's only initializer is zeroed, which
+	// matches every type, so the structural check below has nothing left
+	// to say about it.
+	if g.Domain() == ir.Shared && g.Initializer().Kind() != ir.InitZeroed {
+		c.failItem(ErrShared, "@%s is in domain shared and states an initializer; workgroup storage begins zeroed and nothing can fill it sooner", g.Name())
+		return
+	}
 	c.initMatches(g.Type(), g.Initializer(), "@"+g.Name())
 }
 

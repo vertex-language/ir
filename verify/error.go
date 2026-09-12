@@ -120,6 +120,19 @@ var (
 	// block reached another way would read them undefined — the same
 	// reason ErrInvokeEdge exists.
 	ErrAsmGotoEdge = errors.New("asm goto's fallthrough target has another predecessor")
+
+	// ErrKernel is a kernel that is not shaped like one (§19.20): a result,
+	// a variadic tail, a byval or sret parameter, a naked body, an import
+	// rather than a definition — or a kernel named by ptr.getaddr, call,
+	// or invoke, when its address is the host's to take and nothing on the
+	// device can call it.
+	ErrKernel = errors.New("kernel is not shaped like one")
+
+	// ErrShared is a shared global with an initializer other than zeroed
+	// (§19.21). Workgroup storage exists only while the workgroup does and
+	// no target can fill it beforehand; an initializer would be a store the
+	// frontend did not write.
+	ErrShared = errors.New("shared global is not zeroed")
 )
 
 // An Error is one verifier failure, positioned the way a §19 fault

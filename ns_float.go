@@ -39,6 +39,17 @@ func (n F32NS) MinNum(a, c F32) F32   { return n.bin(VMinNum, a, c) }
 func (n F32NS) MaxNum(a, c F32) F32   { return n.bin(VMaxNum, a, c) }
 func (n F32NS) CopySign(a, c F32) F32 { return n.bin(VCopySign, a, c) }
 
+// The approximate six. Each is one instruction on every GPU in scope and
+// carries that instruction's contract — a few ULP over the domain §A3
+// states — rather than a correctly rounded one. A target with no such
+// instruction supplies the exact answer, which satisfies it.
+func (n F32NS) RcpApprox(a F32) F32   { return n.un(VRcpApprox, a) }
+func (n F32NS) RsqrtApprox(a F32) F32 { return n.un(VRsqrtApprox, a) }
+func (n F32NS) Exp2Approx(a F32) F32  { return n.un(VExp2Approx, a) }
+func (n F32NS) Log2Approx(a F32) F32  { return n.un(VLog2Approx, a) }
+func (n F32NS) SinApprox(a F32) F32   { return n.un(VSinApprox, a) }
+func (n F32NS) CosApprox(a F32) F32   { return n.un(VCosApprox, a) }
+
 // FMA is a*b+c with one rounding.
 func (n F32NS) FMA(a, c, d F32) F32 {
 	return F32{n.b.def1(Op{TypeF32, VFMA}, TypeF32, a.d, c.d, d.d)}

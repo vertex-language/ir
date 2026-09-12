@@ -113,6 +113,21 @@ var (
 		ABI: "ms", Endian: LittleEndian, PtrBits: 64, StackAlign: 16,
 		Vector: true,
 	})
+
+	// The two device targets. Neither admits an ext-float — long double is
+	// f64 on both — and neither admits v128: CUDA's float4 is a struct
+	// with four fields, not a register, and the packed forms both ISAs
+	// have are reached through §W's verbs rather than a vector type. The
+	// abi names the device-function convention; a kernel's is the
+	// callconv of the same name (§6), and which SM or GFX generation the
+	// module is lowered for is that backend's Options, as a CPU's feature
+	// set is.
+	NVPTX64 = NewTarget("nvptx64/cuda", Layout{
+		ABI: "ptx", Endian: LittleEndian, PtrBits: 64, StackAlign: 16,
+	})
+	AMDGCN = NewTarget("amdgcn/hsa", Layout{
+		ABI: "hsa", Endian: LittleEndian, PtrBits: 64, StackAlign: 16,
+	})
 )
 
 // An ItemKind distinguishes the module-item forms of §3.

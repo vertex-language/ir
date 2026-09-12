@@ -1,9 +1,10 @@
 package ir
 
-// A MemAttr is §D4's access attribute.
+// A MemAttr is §D4's access attribute, or §H's scope on an atomic access.
 type MemAttr struct {
 	align    uint64
 	volatile bool
+	scope    Scope
 }
 
 // Align overrides natural alignment downward. N is a power of two no greater
@@ -52,6 +53,10 @@ func (b *Builder) memAttrs(op Op, width uint64, attrs []MemAttr) *imm {
 		if a.volatile {
 			im.volatile = true
 			continue
+		}
+		if a.scope != NoScope {
+			b.fail(op, ErrPlacement, "%s scope on a non-atomic access", a.scope)
+			return nil
 		}
 		if a.align == 0 {
 			continue

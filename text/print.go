@@ -206,7 +206,7 @@ func (pr *printer) typeDecl(t *ir.Type) {
 		}
 		pr.s("}")
 	case ir.KindFunc:
-		pr.s("func ")
+		pr.s("func")
 		pr.absSig(t.Sig())
 	default:
 		pr.s(t.Aliased().String())
@@ -345,7 +345,7 @@ func (pr *printer) defSig(f *ir.Func) {
 
 func (pr *printer) callconv(sig *ir.Sig) {
 	if c := sig.CallConv(); c != ir.CCC {
-		pr.s(c.String())
+		pr.s(" " + c.String())
 	}
 }
 
@@ -574,6 +574,9 @@ func (pr *printer) inst(in *ir.Inst) {
 	case ir.VVaArgRef:
 		pr.f(", @%s", in.NamedType().Name())
 	}
+	if a, ok := in.Axis(); ok {
+		pr.f(" %s", a)
+	}
 	if n, ok := in.Align(); ok {
 		pr.f(" align %d", n)
 	}
@@ -585,6 +588,9 @@ func (pr *printer) inst(in *ir.Inst) {
 	}
 	if in.SingleThread() {
 		pr.s(" singlethread")
+	}
+	if s := in.Scope(); s != ir.NoScope {
+		pr.f(" %s", s)
 	}
 	if in.Volatile() {
 		pr.s(" volatile")
