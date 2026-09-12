@@ -24,6 +24,10 @@ var unOps = map[ir.Verb]bool{
 }
 
 // compareConds maps §B's verbs onto the condition each answers.
+//
+// lt and le are the pointer rows: an address has no sign, so they are the
+// unsigned conditions, the same ones ult and ule answer. A float lt never
+// reaches this table; its ordered reading is isel_float's.
 var compareConds = map[ir.Verb]condCode{
 	ir.VEq:  condEQ,
 	ir.VNe:  condNE,
@@ -31,6 +35,8 @@ var compareConds = map[ir.Verb]condCode{
 	ir.VSLe: condLE,
 	ir.VULt: condLO,
 	ir.VULe: condLS,
+	ir.VLt:  condLO,
+	ir.VLe:  condLS,
 }
 
 // iselInst lowers one non-terminator instruction.
