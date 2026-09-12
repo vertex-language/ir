@@ -8,6 +8,7 @@ require (
 	github.com/vertex-language/elf v0.0.0
 	github.com/vertex-language/i386 v0.0.0
 	github.com/vertex-language/ir v0.0.0
+	github.com/vertex-language/ptx v0.0.0
 )
 
 require (
@@ -24,6 +25,7 @@ replace (
 	github.com/vertex-language/ir => ..
 	github.com/vertex-language/macho => ../../macho
 	github.com/vertex-language/pe => ../../pe
+	github.com/vertex-language/ptx => ../../ptx
 )
 
 replace github.com/vertex-language/asm => ../../asm

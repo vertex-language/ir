@@ -137,6 +137,16 @@ type TLSDescriptors interface {
 	TLSDescriptor(g *ir.Global, template string) error
 }
 
+// A WorkgroupSections target has workgroup-local storage: §5's shared
+// domain, which is a GPU's LDS or PTX's .shared — one instance per
+// workgroup, for the workgroup's lifetime. A target without workgroups
+// refuses the global, on the terms TLSSection refuses a thread-local: the
+// storage and the launch that creates it are one feature, and a CPU has
+// neither.
+type WorkgroupSections interface {
+	SharedSection() Section
+}
+
 // A Section is the part of an assembler's section builder this walk uses.
 type Section interface {
 	Align(n int)
@@ -204,7 +214,13 @@ func lowerGlobal(t Target, g *ir.Global) error {
 	// identity a global that named that section asks for, and a container
 	// has no way to express two sections with one identity.
 	var sec Section
-	if key, comdat := g.ComdatAttr(); comdat {
+	if g.Domain() == ir.Shared {
+		ws, ok := t.(WorkgroupSections)
+		if !ok {
+			return fmt.Errorf("lower: @%s is in domain shared, which needs a workgroup to be local to", g.Name())
+		}
+		sec = ws.SharedSection()
+	} else if key, comdat := g.ComdatAttr(); comdat {
 		cs, ok := t.(ComdatSections)
 		if !ok {
 			return fmt.Errorf("lower: @%s asks for a comdat group, which this target cannot emit", g.Name())
