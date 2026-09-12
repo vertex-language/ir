@@ -94,10 +94,9 @@ func Lower(m *ir.Module, opts Options) (*ptx.Module, error) {
 		m:       m,
 		opts:    opts,
 		pm:      ptx.NewModule(opts.isa(), opts.sm(), ptx.Addr64),
-		funcs:   map[ir.Symbol]*ptx.Func{},
-		kernels: map[*ir.Func]*ptx.Kernel{},
-		vars:    map[ir.Symbol]*ptx.Var{},
-		protos:  map[*ir.Type]*ptx.Proto{},
+		funcs:    map[ir.Symbol]*ptx.Func{},
+		kernels:  map[*ir.Func]*ptx.Kernel{},
+		vars:     map[ir.Symbol]*ptx.Var{},
 	}
 
 	// Declarations first, so that a body can name any function or global
@@ -157,10 +156,9 @@ type lowerer struct {
 	opts Options
 	pm   *ptx.Module
 
-	funcs   map[ir.Symbol]*ptx.Func
-	kernels map[*ir.Func]*ptx.Kernel
-	vars    map[ir.Symbol]*ptx.Var
-	protos  map[*ir.Type]*ptx.Proto
+	funcs    map[ir.Symbol]*ptx.Func
+	kernels  map[*ir.Func]*ptx.Kernel
+	vars     map[ir.Symbol]*ptx.Var
 
 	err error // the first fault the globals adapter recorded
 }

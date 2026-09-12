@@ -33,7 +33,7 @@ type cuda struct {
 	dll *syscall.LazyDLL
 
 	init, driverVersion, deviceGet, deviceGetAttribute, ctxCreate, ctxDestroy,
-	ctxSynchronize, moduleLoadDataEx, moduleUnload, moduleGetFunction,
+	ctxSynchronize, ctxSetCurrent, moduleLoadDataEx, moduleUnload, moduleGetFunction,
 	memAlloc, memFree, memcpyHtoD, memcpyDtoH, launchKernel, getErrorString *syscall.LazyProc
 
 	ctx uintptr
@@ -48,14 +48,24 @@ var (
 
 // device opens the driver once per test binary and skips the test when
 // there is nothing to run on.
+//
+// A CUDA context is current on an OS thread, and a test goroutine may run
+// on any. So the test's thread is pinned for its duration and the context
+// made current on it, which is what a C program gets for free by having
+// one thread.
 func device(t *testing.T) *cuda {
 	t.Helper()
+	runtime.LockOSThread()
+	t.Cleanup(runtime.UnlockOSThread)
 	if !cudaOnce {
 		cudaOnce = true
 		cudaShared, cudaSkipMsg = openCUDA()
 	}
 	if cudaShared == nil {
 		t.Skip(cudaSkipMsg)
+	}
+	if r, _, _ := cudaShared.ctxSetCurrent.Call(cudaShared.ctx); r != 0 {
+		t.Fatalf("cuCtxSetCurrent: %s", cudaShared.errString(r))
 	}
 	return cudaShared
 }
@@ -70,6 +80,7 @@ func openCUDA() (*cuda, string) {
 		"cuDeviceGet": &c.deviceGet, "cuDeviceGetAttribute": &c.deviceGetAttribute,
 		"cuCtxCreate_v2": &c.ctxCreate, "cuCtxDestroy_v2": &c.ctxDestroy,
 		"cuCtxSynchronize":   &c.ctxSynchronize,
+		"cuCtxSetCurrent":    &c.ctxSetCurrent,
 		"cuModuleLoadDataEx": &c.moduleLoadDataEx, "cuModuleUnload": &c.moduleUnload,
 		"cuModuleGetFunction": &c.moduleGetFunction,
 		"cuMemAlloc_v2":       &c.memAlloc, "cuMemFree_v2": &c.memFree,

@@ -64,9 +64,44 @@ func (l *lowerer) declareFunc(f *ir.Func) error {
 	return nil
 }
 
+// retShape is how a device function's results travel: one .param of
+// the result's own type, or — for more than one, which ptxas refuses as
+// separate .param results and accepts as .reg only outside the ABI that
+// indirect calls need — one .param byte array holding every result at its
+// natural offset, which is also how nvcc returns a struct.
+type retShape struct {
+	single bool
+	typ    ptx.Type // single
+	size   int      // array
+	align  int
+	offs   []int64
+}
+
+func retShapeOf(sig *ir.Sig) retShape {
+	rets := sig.Rets()
+	if len(rets) == 1 {
+		return retShape{single: true, typ: paramType(rets[0].Type)}
+	}
+	var sh retShape
+	sh.align = 1
+	var off int64
+	for _, r := range rets {
+		w := int64(paramType(r.Type).Bits() / 8)
+		off = int64(alignUp(uint64(off), uint64(w)))
+		sh.offs = append(sh.offs, off)
+		off += w
+		if int(w) > sh.align {
+			sh.align = int(w)
+		}
+	}
+	sh.size = int(alignUp(uint64(off), uint64(sh.align)))
+	return sh
+}
+
 // newFunc is a .func with the signature's parameters and results as .param
-// declarations. The convention is ccc, which is the device convention; a
-// signature naming a CPU convention is a module built for a CPU.
+// declarations: the ABI nvcc uses and ptxas requires for an indirect call.
+// The convention is ccc, which is the device convention; a signature
+// naming a CPU convention is a module built for a CPU.
 func (l *lowerer) newFunc(name string, sig *ir.Sig) (*ptx.Func, error) {
 	switch sig.CallConv() {
 	case ir.CCC:
@@ -86,8 +121,10 @@ func (l *lowerer) newFunc(name string, sig *ir.Sig) (*ptx.Func, error) {
 		}
 	}
 	pf := ptx.NewFunc(symName(name))
-	for i, r := range sig.Rets() {
-		pf.Return("_r"+itoa(i), paramType(r.Type))
+	if sh := retShapeOf(sig); sh.single {
+		pf.Return("_r", sh.typ)
+	} else if len(sig.Rets()) > 1 {
+		pf.Ret = append(pf.Ret, &ptx.Param{Name: "_r", Type: ptx.B8, Align: sh.align, Len: sh.size})
 	}
 	for i, p := range sig.Params() {
 		pf.Param(paramName(p, i), paramType(p.Type))
@@ -102,9 +139,14 @@ func paramName(p ir.Param, i int) string {
 	return "_p" + itoa(i)
 }
 
-// proto is the .callprototype for a func typedef, declared once per type.
-func (l *lowerer) proto(t *ir.Type) (*ptx.Proto, error) {
-	if p, ok := l.protos[t]; ok {
+// proto is the .callprototype for a func typedef, declared in the body
+// ahead of the first callind that names it — a prototype is a labelled
+// directive and PTX reads top to bottom.
+func (x *fn) proto(t *ir.Type) (*ptx.Proto, error) {
+	if t == nil {
+		return nil, fmt.Errorf("callind names no type")
+	}
+	if p, ok := x.protos[t]; ok {
 		return p, nil
 	}
 	sig := t.Sig()
@@ -124,8 +166,16 @@ func (l *lowerer) proto(t *ir.Type) (*ptx.Proto, error) {
 	for _, p := range sig.Params() {
 		params = append(params, paramType(p.Type))
 	}
-	p := l.pm.CallProto(rets, params)
-	l.protos[t] = p
+	if len(rets) > 1 {
+		sh := retShapeOf(sig)
+		rets = []ptx.Type{ptx.B8}
+		p := x.b.CallProto(rets, params)
+		p.RetArray = [2]int{sh.align, sh.size}
+		x.protos[t] = p
+		return p, nil
+	}
+	p := x.b.CallProto(rets, params)
+	x.protos[t] = p
 	return p, nil
 }
 
@@ -141,6 +191,7 @@ type fn struct {
 
 	regs   map[*ir.Def]ptx.Reg
 	labels map[*ir.Block]*ptx.Label
+	protos map[*ir.Type]*ptx.Proto
 
 	// The local depot: one .local array per function holding every
 	// ptr.alloc, addressed as a generic pointer plus a constant offset.
@@ -154,6 +205,7 @@ func (l *lowerer) lowerFunc(f *ir.Func) error {
 		f:       f,
 		regs:    map[*ir.Def]ptx.Reg{},
 		labels:  map[*ir.Block]*ptx.Label{},
+		protos:  map[*ir.Type]*ptx.Proto{},
 		allocAt: map[*ir.Inst]int64{},
 	}
 	if k, ok := l.kernels[f]; ok {
@@ -189,8 +241,9 @@ func (x *fn) lower() error {
 }
 
 // prologue loads the parameters out of .param space and lays out the
-// depot. Both happen at the top of the entry block; the entry block is
-// blocks[0] and no edge reaches it, so this is emitted exactly once.
+// depot, at the top of the entry block — which is blocks[0] and the target
+// of no edge, so this is emitted exactly once. An i1 arrives as a .b32
+// and becomes a predicate here.
 func (x *fn) prologue() error {
 	var params []*ptx.Param
 	if x.kernel != nil {

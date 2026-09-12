@@ -149,19 +149,24 @@ func (x *fn) brTable(in *ir.Inst) error {
 	return nil
 }
 
-// ret stores the results into the .param results a .func declares and
+// ret stores the results into the .param result a .func declares — one
+// of the result's type, or a byte array at retShape's offsets — and
 // returns; a kernel has none and returns.
 func (x *fn) ret(in *ir.Inst) error {
-	if x.pf != nil {
+	if x.pf != nil && len(in.Args()) > 0 {
+		sh := retShapeOf(x.f.Signature())
+		p := x.pf.Ret[0]
 		for i, d := range in.Args() {
-			p := x.pf.Ret[i]
-			if d.Type() == ir.TypeI1 {
-				r := x.temp(ptx.B32)
-				x.b.Selp(ptx.B32, r, ptx.Imm(1), ptx.Imm(0), x.v(d))
-				x.b.St(ptx.B32, ptx.At(p), r, ptx.ParamSpace)
-				continue
+			var off int64
+			if !sh.single {
+				off = sh.offs[i]
 			}
-			x.b.St(paramType(d.Type()), ptx.At(p), x.v(d), ptx.ParamSpace)
+			v := x.v(d)
+			if d.Type() == ir.TypeI1 {
+				v = x.temp(ptx.B32)
+				x.b.Selp(ptx.B32, v, ptx.Imm(1), ptx.Imm(0), x.v(d))
+			}
+			x.b.St(paramType(d.Type()), ptx.At(p, off), v, ptx.ParamSpace)
 		}
 	}
 	x.b.Ret()
