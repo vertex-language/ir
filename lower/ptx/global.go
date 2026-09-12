@@ -36,7 +36,7 @@ type globalTarget struct {
 type layout struct{}
 
 func (layout) SizeAlign(t ir.FType) (uint64, uint64, error) { return sizeAlign(t) }
-func (layout) FieldOffsets(t *ir.Type) ([]uint64, error)   { return fieldOffsets(t) }
+func (layout) FieldOffsets(t *ir.Type) ([]uint64, error)    { return fieldOffsets(t) }
 
 func (globalTarget) PtrBytes() uint64 { return 8 }
 

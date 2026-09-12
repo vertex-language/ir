@@ -69,10 +69,10 @@ func openCUDA() (*cuda, string) {
 		"cuInit": &c.init, "cuDriverGetVersion": &c.driverVersion,
 		"cuDeviceGet": &c.deviceGet, "cuDeviceGetAttribute": &c.deviceGetAttribute,
 		"cuCtxCreate_v2": &c.ctxCreate, "cuCtxDestroy_v2": &c.ctxDestroy,
-		"cuCtxSynchronize": &c.ctxSynchronize,
+		"cuCtxSynchronize":   &c.ctxSynchronize,
 		"cuModuleLoadDataEx": &c.moduleLoadDataEx, "cuModuleUnload": &c.moduleUnload,
 		"cuModuleGetFunction": &c.moduleGetFunction,
-		"cuMemAlloc_v2": &c.memAlloc, "cuMemFree_v2": &c.memFree,
+		"cuMemAlloc_v2":       &c.memAlloc, "cuMemFree_v2": &c.memFree,
 		"cuMemcpyHtoD_v2": &c.memcpyHtoD, "cuMemcpyDtoH_v2": &c.memcpyDtoH,
 		"cuLaunchKernel": &c.launchKernel, "cuGetErrorString": &c.getErrorString,
 	}
