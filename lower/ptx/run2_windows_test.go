@@ -33,8 +33,8 @@ func TestRunBulkTableAsm(t *testing.T) {
 	entry.BrIf(entry.I32.Eq(entry.I32.WorkitemID(ir.X), entry.I32.Const(0)), only.To(), exit.To())
 
 	b := only
-	b.MemCpy(slot, src, b.I64.Const(16))                                     // slot[0:16] = src[0:16]
-	b.MemMove(b.Ptr.Add(slot, b.I64.Const(4)), slot, b.I64.Const(12))        // slot[4:16] = slot[0:12], overlapping forward
+	b.MemCpy(slot, src, b.I64.Const(16))                                            // slot[0:16] = src[0:16]
+	b.MemMove(b.Ptr.Add(slot, b.I64.Const(4)), slot, b.I64.Const(12))               // slot[4:16] = slot[0:12], overlapping forward
 	b.MemSet(b.Ptr.Add(slot, b.I64.Const(16)), b.I32.Const(0x1AB), b.I64.Const(16)) // low byte 0xAB
 	b.MemCpy(out, slot, b.I64.Const(32))
 	cmp := b.MemCmp(src, b.Ptr.Add(src, b.I64.Const(16)), b.I64.Const(16))

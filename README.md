@@ -16,9 +16,10 @@ Four things live here and nothing else:
   builder could have produced and lowering may assume.
 - **`ir/text`** — the `.vir` syntax, print-only. Print a module. The
   only package in the repo that knows what VIR *looks like*.
-- **`ir/lower`** — VIR to a finished, immutable `obj.Object`, per
-  architecture. Its own `go.mod`, because it depends on one of `i386`,
-  `amd64`, or `arm64` and the other three must not.
+- **`ir/lower`** — VIR to a finished artifact, per architecture: an
+  immutable `obj.Object` for a CPU, a `*ptx.Module` for an NVIDIA GPU.
+  Its own `go.mod`, because it depends on `i386`, `amd64`, `arm64` and
+  `ptx`, and the other three must not.
 
 The normative specification is [`spec/`](spec/): the
 [overview](spec/overview.md), the [instruction
@@ -206,6 +207,33 @@ between them does not change shape — what has to change is the module's
 first. Lowering a module built for one target against another is refused
 by name rather than lowered anyway.
 
+A GPU is the same two lines with a different ending. `ir.NVPTX64` is the
+target, `kernel` is the calling convention of the function the host
+launches, and §W's verbs are how a work-item learns where it is; the
+artifact is PTX text, which is what every NVIDIA toolchain stops at —
+the driver JITs it, or `ptxas` does.
+
+```go
+import (
+	"github.com/vertex-language/ir"
+	lower "github.com/vertex-language/ir/lower/ptx"
+	"github.com/vertex-language/ptx"
+	"github.com/vertex-language/ptx/text"
+)
+
+m := ir.NewModule("vecadd", ir.NVPTX64)
+fn := m.Func("vector_add").Export().CallConv(ir.Kernel)
+// ... i32.workgroup_id x, i32.workitem_id x, f32.load, f32.add, f32.store
+
+pm, err := lower.Lower(m, lower.Options{SM: ptx.SM75})
+src, err := text.Print(pm) // .version 8.0 / .target sm_75 / .visible .entry vector_add(...)
+```
+
+There is no register allocator on that path and no frame: PTX is itself
+a virtual-register IR, so `lower/ptx` is instruction selection alone.
+Its tests lower a kernel, hand the text to the CUDA driver through
+`nvcuda.dll` — no toolkit, no cgo — launch it, and read the answer back.
+
 ---
 
 ## Where this sits
@@ -219,6 +247,7 @@ architecture:
 | [`i386`](https://github.com/vertex-language/i386) | Intel 386 | ELF, COFF |
 | [`amd64`](https://github.com/vertex-language/amd64) | AMD64 | ELF, COFF, Mach-O |
 | [`arm64`](https://github.com/vertex-language/arm64) | AArch64 | ELF, COFF, Mach-O |
+| [`ptx`](https://github.com/vertex-language/ptx) | NVIDIA PTX | `.ptx` text, through `ptx/text` |
 
 Each is a complete, standalone instruction builder — registers, an ISA
 table, an encoder, and an in-memory `obj.Object` — with its own
@@ -254,23 +283,24 @@ honest state of it rather than the intended one. A row that is not ✅ is
 refused by name at `Lower`, with the reason — never lowered as something
 else.
 
-| | amd64 | arm64 | i386 |
-|---|---|---|---|
-| §A · §A2 arithmetic, wide multiply, overflow predicates | ✅ | ✅ | ✅ |
-| §A3 float arithmetic, at `f32`/`f64` | ✅ | ✅ | ✅ |
-| §A4–§A7 bitwise, shifts, bit counting, constants | ✅ | ✅ | ✅ |
-| §B comparisons | ✅ | ✅ | ✅ |
-| §C–§C4 conversions | ✅ | ✅ | ✅ |
-| §D · §D2 memory, sub-width memory | ✅ | ✅ | ✅ |
-| §D3 pointer ops | all but `tlsaddr` | all but `tlsaddr` | all but `tlsaddr` |
-| §E bulk memory | ✅ non-`volatile` | ✅ non-`volatile` | ✅ non-`volatile` |
-| §F select | ✅ | ✅ | ✅ |
-| §G · §G2 calls, terminators, computed branches | ✅ | ✅ | ✅ |
-| §G3 unwinding — `invoke`, `invokeind`, `resume` | — | Mach-O | — |
-| §G4 inline assembly | — | — | — |
-| §H atomics | ✅ | ✅ | ✅ |
-| §I variadics | ✅ ¹ | Apple's variant only ² | ✅ |
-| ext-float | `f128` ✅, `f80` — ³ | `f128` — ⁴ | `f80` — ³ |
+| | amd64 | arm64 | i386 | ptx |
+|---|---|---|---|---|
+| §A · §A2 arithmetic, wide multiply, overflow predicates | ✅ | ✅ | ✅ | ✅ |
+| §A3 float arithmetic, at `f32`/`f64` | ✅ | ✅ | ✅ | ✅, and the approximate six |
+| §A4–§A7 bitwise, shifts, bit counting, constants | ✅ | ✅ | ✅ | ✅ |
+| §B comparisons | ✅ | ✅ | ✅ | ✅ |
+| §C–§C4 conversions | ✅ | ✅ | ✅ | ✅ |
+| §D · §D2 memory, sub-width memory | ✅ | ✅ | ✅ | ✅ natural alignment ⁵ |
+| §D3 pointer ops | all but `tlsaddr` | all but `tlsaddr` | all but `tlsaddr` | `alloc`, `alloca`, `getaddr`, `diff`, stack save/restore ⁶ |
+| §E bulk memory | ✅ non-`volatile` | ✅ non-`volatile` | ✅ non-`volatile` | ✅ as byte loops |
+| §F select | ✅ | ✅ | ✅ | ✅ |
+| §G · §G2 calls, terminators, computed branches | ✅ | ✅ | ✅ | all but `brind` ⁷ |
+| §G3 unwinding — `invoke`, `invokeind`, `resume` | — | Mach-O | — | — ⁸ |
+| §G4 inline assembly | — | — | — | `asm`; not `asm goto` |
+| §H atomics | ✅ | ✅ | ✅ | ✅ with scopes ⁹; not the narrow forms |
+| §I variadics | ✅ ¹ | Apple's variant only ² | ✅ | — ⁸ |
+| §W work-items, `barrier`, `shared`, the wave verbs | — | — | — | ✅ |
+| ext-float | `f128` ✅, `f80` — ³ | `f128` — ⁴ | `f80` — ³ | neither ⁸ |
 
 1. Except `ptr.va_arg_ref` of an aggregate small enough to have been
    passed in registers, whose eightbytes are scattered through the save
@@ -285,6 +315,19 @@ else.
    declare no instruction for. It is that repository's work before it is
    this one's. AArch64's `long double` is binary128, so `f80` is not a
    type that target has at all.
+5. PTX has no unaligned access. An `align` below the natural one is
+   refused rather than assembled from bytes.
+6. `ptr.alloca`, `stacksave` and `stackrestore` are PTX 7.3's own
+   instructions and need sm_52; `tlsaddr`, `blockaddr`, `frameaddr` and
+   `returnaddr` have no PTX equivalent.
+7. `br_table` is `brx.idx`. `brind` takes an address and `brx.idx` an
+   index, and there is no instruction that takes the former.
+8. There is no unwinding on the device, no `va_list`, and `long double`
+   is `f64` — the `layout` block admits no ext-float, so §19.12 refuses
+   the namespace before lowering sees it.
+9. From sm_70. Below it PTX has no scope qualifiers: `device` and
+   `system` lower to the unscoped forms with `membar` where an acquire
+   or release needs one, and `workgroup` is refused rather than widened.
 4. `f128` on amd64 is compiler-rt — §0 is explicit that a namespace the
    layout admits is usable whether or not silicon implements it, and
    that lowering supplies the call. Its §A3 rows are the arithmetic and
@@ -311,6 +354,14 @@ the call, which is a legalization pass and not a selection rule.
 
 Only `O0` exists. `Options.OptLevel` is there so the day there is a
 second level is not a signature change.
+
+`lower/ptx` differs from the three in what it hands back and what it
+does not do. It returns a `*ptx.Module` — PTX is a virtual ISA and the
+text is the artifact, the way `obj.Object` is a CPU's — and it has no
+`mir`, no `regalloc` and no frame, because PTX registers are unlimited
+and ptxas allocates them. Its `Options` name an SM and an ISA version
+rather than a feature set, and a verb the chosen SM lacks is refused by
+name the way a gated verb is on amd64.
 
 ---
 
@@ -391,7 +442,8 @@ ir/
     │   ── and what they do not ──
     ├── i386/                 against github.com/vertex-language/i386
     ├── amd64/                against github.com/vertex-language/amd64
-    └── arm64/                against github.com/vertex-language/arm64
+    ├── arm64/                against github.com/vertex-language/arm64
+    └── ptx/                  against github.com/vertex-language/ptx — isel only
 ```
 
 Each `lower/<arch>` is the same dozen files, because the job decomposes
@@ -423,7 +475,7 @@ upward.**
 ir              imports nothing outside the standard library
 ir/verify       imports ir
 ir/text         imports ir
-ir/lower        imports ir, ir/verify, plus one of i386, amd64, arm64
+ir/lower        imports ir, ir/verify, plus one of i386, amd64, arm64, ptx
 ```
 
 Nothing imports `lower`. The nested `go.mod` makes that
@@ -780,6 +832,18 @@ checked against something that is not itself:
   compute — that the ABI is right on both sides of a real call boundary,
   that the frame balances, that a callee-saved register really is saved.
   Skipped rather than failed off Apple Silicon.
+- **isel, on `ptx`** — lowered, printed, handed to the CUDA driver
+  through `nvcuda.dll` with `syscall.NewLazyDLL` — no toolkit and no
+  cgo — JIT-loaded, launched on whatever NVIDIA GPU the machine has,
+  and read back. Twelve kernels: a loop through block parameters, the
+  depot and sub-width memory, a workgroup reduction through a shared
+  tile and `barrier`, a histogram and a compare-and-swap, a two-result
+  device function and a call through a pointer, the scalar ALU over
+  sixteen inputs, the bulk verbs and `br_table` and inline asm, the
+  approximate six and `f64`, a butterfly across a warp. Skipped without
+  the driver. This is what caught that ptxas refuses more than one
+  `.param` result, reads a `.callprototype` only inside a body, and
+  binds a context to an OS thread.
 - **isel, on `i386`** — also run, which took some arranging. There is no
   way to execute a 32-bit x86 process on an Apple Silicon host, so the
   harness links the output against a freestanding runtime into a
