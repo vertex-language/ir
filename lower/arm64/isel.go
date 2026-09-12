@@ -793,10 +793,35 @@ func emitCallSeq(c *cursor, vr *vregs, places []place,
 			} else {
 				src = site.intReg(aapcsIntArgs[k], sretAgg.w)
 			}
-			c.Emit(mir.Instr{
-				Op:   storeAtOp{off: int64(uint64(k) * sretAgg.step), w: sretAgg.w},
-				Uses: []mir.VReg{src, srcs[0]},
-			})
+			off := int64(uint64(k) * sretAgg.step)
+			// How much of the object this register still has to cover. A
+			// homogeneous aggregate's members are exactly its registers, so
+			// the answer there is always the whole width; a composite in
+			// general-purpose registers is as long as the struct, and the
+			// last register carries only what is left of it.
+			rest := int64(sretAgg.size) - off
+			full := int64(8)
+			if sretAgg.w == w32 || sretAgg.w == wf32 {
+				full = 4
+			}
+			switch {
+			case sretAgg.kind == aggHFA || rest >= full:
+				c.Emit(mir.Instr{
+					Op:   storeAtOp{off: off, w: sretAgg.w},
+					Uses: []mir.VReg{src, srcs[0]},
+				})
+			case rest == 4:
+				c.Emit(mir.Instr{
+					Op:   storeAtOp{off: off, w: w32},
+					Uses: []mir.VReg{src, srcs[0]},
+				})
+			case rest > 0:
+				c.Emit(mir.Instr{
+					Op:   storeTailOp{off: off, bytes: int(rest)},
+					Defs: []mir.VReg{vr.temp(w64)},
+					Uses: []mir.VReg{src, srcs[0]},
+				})
+			}
 		}
 	}
 

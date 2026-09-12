@@ -225,6 +225,9 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 			case storeAtOp:
 				emitStoreAt(text, op, in, x, w, d, s)
 
+			case storeTailOp:
+				emitStoreTail(text, op, in, x, w)
+
 			case outArgAddrOp:
 				// The outgoing area is measured from SP, and SP is not an
 				// operand of an ordinary move — ADD by an immediate is how
@@ -963,6 +966,44 @@ func emitStoreAt(text *arm64asm.Section, op storeAtOp, in mir.Instr,
 		text.StrImm32(w(in.Uses[0]), arm64asm.Mem32(base).Off(op.off))
 	default:
 		text.StrImm64(x(in.Uses[0]), arm64asm.Mem64(base).Off(op.off))
+	}
+}
+
+// emitStoreTail writes the 1-7 bytes an aggregate has left over, out of the
+// register that carried them.
+//
+// The value is copied into a scratch register first and shifted down as each
+// piece is written, because the register it arrives in is x0 or x1 and the
+// bytes above the ones being stored are the next piece rather than padding.
+// clang writes the same sequence for the same reason: a three-byte struct
+// comes back in x0 and is stored as a halfword and a byte, not as a
+// doubleword over whatever the object was next to.
+func emitStoreTail(text *arm64asm.Section, op storeTailOp, in mir.Instr,
+	x func(mir.VReg) reg.X, w func(mir.VReg) reg.W) {
+
+	base := x(in.Uses[1])
+	tmp := in.Defs[0]
+	text.MovReg64(x(tmp), x(in.Uses[0]))
+
+	off, rest := op.off, op.bytes
+	for rest > 0 {
+		switch {
+		case rest >= 4:
+			text.StrImm32(w(tmp), arm64asm.Mem32(base).Off(off))
+			off, rest = off+4, rest-4
+			if rest > 0 {
+				text.LsrImm64(x(tmp), x(tmp), 32)
+			}
+		case rest >= 2:
+			text.StrhImm(w(tmp), arm64asm.Mem16(base).Off(off))
+			off, rest = off+2, rest-2
+			if rest > 0 {
+				text.LsrImm64(x(tmp), x(tmp), 16)
+			}
+		default:
+			text.StrbImm(w(tmp), arm64asm.Mem8(base).Off(off))
+			off, rest = off+1, rest-1
+		}
 	}
 }
 

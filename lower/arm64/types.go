@@ -244,6 +244,21 @@ type (
 		w   width
 	}
 
+	// storeTailOp writes the last 1-7 bytes of an aggregate that came back
+	// in registers.
+	//
+	// §5.5 returns a composite of sixteen bytes or fewer in x0 and x1, and
+	// the caller writes it into the storage it set aside. The size is the
+	// *aggregate's*, not the registers': a twelve-byte struct arrives in
+	// two registers and occupies twelve bytes, so storing both of them
+	// whole writes four bytes past the object and over whatever came next.
+	// Uses are the value, the base address and nothing else; the shifting
+	// is done in a scratch register this op defines.
+	storeTailOp struct {
+		off   int64
+		bytes int // 1..7
+	}
+
 	// spillOp and reloadOp are what regalloc asks for when it runs out.
 	spillOp struct {
 		off   int64
