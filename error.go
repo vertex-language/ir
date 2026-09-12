@@ -138,6 +138,10 @@ func (m *Module) deferCheck(c func() *Error) {
 // reads as one name, because nothing in the grammar puts two symbols
 // against each other without whitespace between.
 //
+// "<" and ">" are cl's spelling of a closure type: `??R<lambda_1>@@QEBAHH@Z`
+// is a lambda's operator(), and COFF takes the angle brackets as it takes
+// the rest. The text form is unaffected for the same reason "@" is.
+//
 // They stay out of validIdent, because a block label or a type name is
 // this module's own business and gains nothing from them.
 func validSymbol(s string) bool {
@@ -147,7 +151,7 @@ func validSymbol(s string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {
-		case c == '_' || c == '$' || c == '?' || c == '@' || c == '.':
+		case c == '_' || c == '$' || c == '?' || c == '@' || c == '.' || c == '<' || c == '>':
 		case c >= 'a' && c <= 'z':
 		case c >= 'A' && c <= 'Z':
 		case c >= '0' && c <= '9' && i > 0:
