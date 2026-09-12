@@ -184,13 +184,23 @@ func Lower(m *ir.Module, opts Options) (*arm64obj.Object, error) {
 	for _, it := range m.Items() {
 		switch x := it.(type) {
 		case *ir.Func:
-			if _, comdat := x.ComdatAttr(); comdat {
-				// Emitting it as an ordinary definition would link once
-				// and fail the moment a second unit carried the same
-				// function; refusing keeps the failure at the compiler.
-				return nil, fmt.Errorf("lower: @%s asks for a comdat group, which this target does not emit yet", x.Name())
+			// A comdat function is a section of its own, elected on its
+			// name, so that the linker can discard the copies every other
+			// unit emitted without touching anything beside them. Its
+			// unwind records need no such treatment: they are Mach-O's,
+			// and Mach-O folds the section back into __text and discards
+			// nothing but the weak duplicate the records name.
+			sec := text
+			if key, comdat := x.ComdatAttr(); comdat {
+				if key == "" {
+					key = x.Name()
+				}
+				if key != x.Name() {
+					return nil, fmt.Errorf("lower: @%s asks for comdat %q; a function's group is keyed on its own name", x.Name(), key)
+				}
+				sec = am.ComdatSection(arm64asm.Text.String(), arm64asm.Text, key)
 			}
-			if err := lowerFunc(am, text, x, opts); err != nil {
+			if err := lowerFunc(am, sec, x, opts); err != nil {
 				return nil, err
 			}
 		case *ir.ModuleAsm:
