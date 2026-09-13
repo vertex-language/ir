@@ -102,3 +102,37 @@ func TestDivergentBranchRefused(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A kernel calling a device helper: the helper is inlined, the kernel
+// lowers, and the helper — internal, and now uncalled — is left alone.
+func TestDeviceCallInlined(t *testing.T) {
+	m := ir.NewModule("h", ir.AMDGCN)
+	twice := m.Func("twice").Internal().ReturnsF32().NoUnwind()
+	x := twice.ParamF32("x")
+	te := twice.Entry()
+	te.Return(te.F32.Mul(x, te.F32.Const(2)))
+
+	fn := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+	a := fn.ParamPtr("a", ir.NoAlias)
+	entry := fn.Entry()
+	tid := entry.I32.WorkitemID(ir.X)
+	off := entry.I64.Shl(entry.I64.ZExtI32(tid), entry.I64.Const(2))
+	p := entry.Ptr.Add(a, off)
+	entry.F32.Store(entry.Call(twice, entry.F32.Load(p)).F32(0), p)
+	entry.Return()
+
+	o := lowerObj(t, m, lower.Options{ASIC: feature.GFX942})
+	if kds := o.KernelDescriptors(); len(kds) != 1 || kds[0].Name != "k" {
+		t.Fatalf("descriptors = %+v", kds)
+	}
+	got := disassemble(t, o, feature.GFX942)
+	if got == nil {
+		return
+	}
+	text := strings.Join(got, "\n")
+	for _, want := range []string{"flat_load_dword", "v_mul_f32_e32", "flat_store_dword", "s_endpgm"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("no %s in:\n%s", want, text)
+		}
+	}
+}

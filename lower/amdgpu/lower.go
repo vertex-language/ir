@@ -15,6 +15,10 @@
 //     uniform trip count is that twice. A branch on a divergent
 //     condition is refused by name — the exec-mask lowering is the next
 //     milestone, and refusing is what keeps this one honest.
+//   - 28, calls. There is no device calling convention yet, so every
+//     call a kernel makes is inlined first, by lower/inline, and what
+//     remains — a call through a pointer, a call to an import — is
+//     refused. Lower rewrites the module it is given to do this.
 //
 // # What is different about this target
 //
@@ -40,6 +44,7 @@ import (
 
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/ir/lower/globals"
+	"github.com/vertex-language/ir/lower/inline"
 	"github.com/vertex-language/ir/lower/mir"
 	"github.com/vertex-language/ir/lower/regalloc"
 )
@@ -65,9 +70,19 @@ type Options struct {
 }
 
 // Lower builds an AMDGPU code object from m.
+//
+// Every call a kernel makes is inlined into it first, which changes m:
+// a device function has no calling convention on this target yet, and
+// its body copied into each kernel that calls it is the one way it runs.
+// A device function that is not exported is left alone once its callers
+// have their copies; an exported one is refused, since something outside
+// the module would call it.
 func Lower(m *ir.Module, opts Options) (*amdgpuobj.Object, error) {
 	if err := checkLayout(m); err != nil {
 		return nil, err
+	}
+	if err := inline.Module(m, inline.Options{Into: isKernel}); err != nil {
+		return nil, fmt.Errorf("lower: %w", err)
 	}
 	if opts.ASIC == 0 {
 		return nil, fmt.Errorf("lower: Options.ASIC names no processor; there is no AMD GPU every kernel runs on")
@@ -110,6 +125,8 @@ func Lower(m *ir.Module, opts Options) (*amdgpuobj.Object, error) {
 	return am.Finalize()
 }
 
+func isKernel(f *ir.Func) bool { return f.Signature().CallConv() == ir.Kernel }
+
 // checkLayout refuses a module whose layout block is not the device's.
 func checkLayout(m *ir.Module) error {
 	l := m.Layout()
@@ -143,8 +160,11 @@ func (l *lowerer) wave64() bool { return l.am.WaveSize() != feature.Wave32 }
 
 // lowerFunc runs the pipeline for one function.
 func (l *lowerer) lowerFunc(fn *ir.Func) error {
-	if fn.Signature().CallConv() != ir.Kernel {
-		return fmt.Errorf("lower: @%s: a device function; calls are not lowered yet, and the inliner that would make them unnecessary is not written", fn.Name())
+	if !isKernel(fn) {
+		if fn.Linkage() == ir.Export {
+			return fmt.Errorf("lower: @%s: an exported device function; there is no calling convention for the device yet, and only a kernel's own calls are inlined", fn.Name())
+		}
+		return nil
 	}
 	if _, ok := fn.AsmBodyText(); ok {
 		return fmt.Errorf("lower: @%s: a function whose body is assembly is not emitted yet", fn.Name())

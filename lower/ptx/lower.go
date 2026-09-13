@@ -47,6 +47,7 @@ import (
 
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/ir/lower/globals"
+	"github.com/vertex-language/ir/lower/inline"
 	"github.com/vertex-language/ptx"
 )
 
@@ -69,6 +70,12 @@ type Options struct {
 	// SM — scoped atomics below sm_70, f64 atomics below sm_60 — are
 	// refused by name against the SM chosen here.
 	SM ptx.Target
+
+	// Inline copies every device function a kernel calls into the
+	// kernel first, through lower/inline, which rewrites the module it
+	// is given. PTX has a calling convention, so this is only speed: a
+	// call through .param space is a round trip through local memory.
+	Inline bool
 }
 
 func (o Options) isa() ptx.ISAVersion {
@@ -89,6 +96,12 @@ func (o Options) sm() ptx.Target {
 func Lower(m *ir.Module, opts Options) (*ptx.Module, error) {
 	if err := checkLayout(m); err != nil {
 		return nil, err
+	}
+	if opts.Inline {
+		kernels := func(f *ir.Func) bool { return f.Signature().CallConv() == ir.Kernel }
+		if err := inline.Module(m, inline.Options{Into: kernels}); err != nil {
+			return nil, fmt.Errorf("lower: %w", err)
+		}
 	}
 	l := &lowerer{
 		m:       m,
