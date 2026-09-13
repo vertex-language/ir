@@ -22,7 +22,13 @@ func (l *lowerer) emit(x *fnState, assigned map[mir.VReg]regalloc.PhysReg) error
 	k := l.am.Kernel(x.fn.Name(), x.kernelOptions(vgprs, sgprs)...)
 	text := k.Section()
 	e := &emitter{text: text, assigned: assigned}
-	blocks := x.mf.Blocks
+	e.forward(x.mf.Blocks)
+	var blocks []*mir.Block
+	for _, b := range x.mf.Blocks {
+		if _, skip := e.fwd[b.Label]; !skip {
+			blocks = append(blocks, b)
+		}
+	}
 	for i, b := range blocks {
 		if i > 0 {
 			text.Label(b.Label)
@@ -65,6 +71,53 @@ func registerCounts(assigned map[mir.VReg]regalloc.PhysReg) (vgprs, sgprs int) {
 type emitter struct {
 	text     *amdgpuasm.Section
 	assigned map[mir.VReg]regalloc.PhysReg
+
+	// fwd is where a branch to an empty block goes instead: an edge block
+	// whose every copy the allocator coalesced away is a branch and
+	// nothing else, so the branch that reaches it takes its target.
+	fwd map[string]string
+}
+
+// forward finds the empty blocks and resolves chains of them.
+func (e *emitter) forward(blocks []*mir.Block) {
+	e.fwd = map[string]string{}
+	for _, b := range blocks[1:] {
+		if n := len(b.Instrs); n > 0 {
+			if br, ok := b.Instrs[n-1].Op.(branchOp); ok && e.allElided(b.Instrs[:n-1]) {
+				e.fwd[b.Label] = br.target
+			}
+		}
+	}
+	for from := range e.fwd {
+		to := e.fwd[from]
+		for hops := 0; hops < len(e.fwd); hops++ {
+			next, ok := e.fwd[to]
+			if !ok || next == from {
+				break
+			}
+			to = next
+		}
+		e.fwd[from] = to
+	}
+}
+
+// allElided reports whether every instruction is a copy the assignment
+// made a no-op.
+func (e *emitter) allElided(ins []mir.Instr) bool {
+	for _, in := range ins {
+		if _, ok := in.Op.(movOp); !ok || e.reg(in.Defs[0]) != e.reg(in.Uses[0]) {
+			return false
+		}
+	}
+	return true
+}
+
+// target is a branch's label after forwarding.
+func (e *emitter) target(label string) string {
+	if to, ok := e.fwd[label]; ok {
+		return to
+	}
+	return label
 }
 
 func (e *emitter) reg(v mir.VReg) reg.Reg {
@@ -114,16 +167,16 @@ func (e *emitter) instr(in mir.Instr, next string) error {
 			e.text.Emit("s_mov_b64", dst, src)
 		}
 	case branchOp:
-		if op.target != next {
-			e.text.Emit("s_branch", operand.NewLabel(op.target))
+		if t := e.target(op.target); t != next {
+			e.text.Emit("s_branch", operand.NewLabel(t))
 		}
 	case cbranchOp:
 		// The mask against the active lanes, into VCC as scratch; SCC is
 		// whether any bit survived.
 		e.text.Emit("s_and_b64", reg.VCC, e.reg(in.Uses[0]), reg.EXEC)
-		e.text.Emit("s_cbranch_scc1", operand.NewLabel(op.then))
-		if op.els != next {
-			e.text.Emit("s_branch", operand.NewLabel(op.els))
+		e.text.Emit("s_cbranch_scc1", operand.NewLabel(e.target(op.then)))
+		if t := e.target(op.els); t != next {
+			e.text.Emit("s_branch", operand.NewLabel(t))
 		}
 	case endpgmOp:
 		e.text.Emit("s_endpgm")
