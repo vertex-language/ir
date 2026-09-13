@@ -6,6 +6,7 @@ package amdgpu
 
 import (
 	"fmt"
+	"math"
 
 	amdgpuasm "github.com/vertex-language/amdgpu"
 	"github.com/vertex-language/amdgpu/obj"
@@ -21,7 +22,7 @@ func (l *lowerer) emit(x *fnState, assigned map[mir.VReg]regalloc.PhysReg) error
 	vgprs, sgprs := registerCounts(assigned)
 	k := l.am.Kernel(x.fn.Name(), x.kernelOptions(vgprs, sgprs)...)
 	text := k.Section()
-	e := &emitter{text: text, assigned: assigned}
+	e := &emitter{text: text, assigned: assigned, trapLabel: x.fn.Name() + ".trap"}
 	e.forward(x.mf.Blocks)
 	var blocks []*mir.Block
 	for _, b := range x.mf.Blocks {
@@ -42,6 +43,10 @@ func (l *lowerer) emit(x *fnState, assigned map[mir.VReg]regalloc.PhysReg) error
 				return fmt.Errorf("lower: @%s: %s: %w", x.fn.Name(), b.Label, err)
 			}
 		}
+	}
+	if e.trapUsed {
+		text.Label(e.trapLabel)
+		text.Emit("s_trap", operand.Imm(2))
 	}
 	text.EndLabel(x.fn.Name())
 	return l.am.Err()
@@ -76,6 +81,11 @@ type emitter struct {
 	// whose every copy the allocator coalesced away is a branch and
 	// nothing else, so the branch that reaches it takes its target.
 	fwd map[string]string
+
+	// trapLabel is the function's s_trap, emitted once if anything
+	// branches to it.
+	trapLabel string
+	trapUsed  bool
 }
 
 // forward finds the empty blocks and resolves chains of them.
@@ -182,6 +192,10 @@ func (e *emitter) instr(in mir.Instr, next string) error {
 		e.text.Emit("s_endpgm")
 	case trapOp:
 		e.text.Emit("s_trap", operand.Imm(2))
+	case trapIfOp:
+		e.text.Emit("s_and_b64", reg.VCC, e.reg(in.Uses[0]), reg.EXEC)
+		e.text.Emit("s_cbranch_scc1", operand.NewLabel(e.trapLabel))
+		e.trapUsed = true
 	default:
 		return fmt.Errorf("%T is not an instruction this emitter knows", in.Op)
 	}
@@ -194,17 +208,19 @@ func (e *emitter) operand(o opnd, in mir.Instr) operand.Operand {
 	case oDef:
 		return e.reg(in.Defs[o.i])
 	case oUse:
-		return e.reg(in.Uses[o.i])
+		return modified(o, e.reg(in.Uses[o.i]))
 	case oDefLo:
 		return e.half(in.Defs[o.i], false)
 	case oDefHi:
 		return e.half(in.Defs[o.i], true)
 	case oUseLo:
-		return e.half(in.Uses[o.i], false)
+		return modified(o, e.half(in.Uses[o.i], false))
 	case oUseHi:
-		return e.half(in.Uses[o.i], true)
+		return modified(o, e.half(in.Uses[o.i], true))
 	case oImm:
 		return immediate(o.imm)
+	case oFImm:
+		return operand.Float(math.Float32frombits(uint32(o.imm)))
 	case oVCC:
 		return reg.VCC
 	case oExec:
@@ -231,6 +247,18 @@ func (e *emitter) operand(o opnd, in mir.Instr) operand.Operand {
 		return operand.Ref(o.sym, obj.RefRel32Hi).WithAddend(o.imm)
 	}
 	panic(fmt.Sprintf("amdgpu: operand kind %d", o.kind))
+}
+
+// modified wraps a source in its neg and abs modifiers.
+func modified(o opnd, r reg.Reg) operand.Operand {
+	var out operand.Operand = r
+	if o.abs {
+		out = operand.Abs(out)
+	}
+	if o.neg {
+		out = operand.Neg(out)
+	}
+	return out
 }
 
 // immediate is a 32-bit constant as the assembler takes it: an inline

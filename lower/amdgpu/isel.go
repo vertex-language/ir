@@ -72,7 +72,7 @@ func (x *fnState) selectInst(c *cursor, in *ir.Inst) error {
 		return x.mul(c, in)
 	case ir.VSMulHi, ir.VUMulHi:
 		if t != ir.TypeI32 {
-			return fmt.Errorf("a 64-bit high multiply is not lowered yet")
+			return x.mulHi64(c, in)
 		}
 		mn := "v_mul_hi_i32"
 		if op.Verb == ir.VUMulHi {
@@ -80,15 +80,44 @@ func (x *fnState) selectInst(c *cursor, in *ir.Inst) error {
 		}
 		return x.binary(c, in, mn)
 	case ir.VSDiv, ir.VUDiv, ir.VSRem, ir.VURem:
-		return fmt.Errorf("no integer divide instruction; the expansion is not lowered yet")
+		if t != ir.TypeI32 {
+			return fmt.Errorf("the 64-bit divide expansion is not lowered yet")
+		}
+		return x.divRem32(c, in)
 	case ir.VNeg:
 		return x.neg(c, in)
 
 	// —— §A3 ——
 	case ir.VDiv:
-		return fmt.Errorf("a correctly rounded divide is the div_scale sequence, not lowered yet")
+		d, err := x.result(in)
+		if err != nil {
+			return err
+		}
+		a, err := x.args(in)
+		if err != nil {
+			return err
+		}
+		if t == ir.TypeF64 {
+			x.fdiv64(c, d, a[0], a[1])
+		} else {
+			x.fdiv32(c, d, a[0], a[1])
+		}
+		return nil
 	case ir.VSqrt:
-		return fmt.Errorf("v_sqrt is not correctly rounded; the refinement is not lowered yet")
+		d, err := x.result(in)
+		if err != nil {
+			return err
+		}
+		a, err := x.args(in)
+		if err != nil {
+			return err
+		}
+		if t == ir.TypeF64 {
+			x.fsqrt64(c, d, a[0])
+		} else {
+			x.fsqrt32(c, d, a[0])
+		}
+		return nil
 	case ir.VFMA:
 		if t == ir.TypeF64 {
 			return x.ternary(c, in, "v_fma_f64")
@@ -96,15 +125,11 @@ func (x *fnState) selectInst(c *cursor, in *ir.Inst) error {
 		return x.ternary(c, in, "v_fma_f32")
 	case ir.VAbs:
 		return x.signBit(c, in, "v_and_b32", 0x7fffffff)
-	case ir.VMinNum:
-		return x.binary(c, in, floatMn(t, "v_min"))
-	case ir.VMaxNum:
-		return x.binary(c, in, floatMn(t, "v_max"))
-	case ir.VMinimum, ir.VMaximum:
-		return fmt.Errorf("the IEEE-2019 minimum is a NaN test around v_min; not lowered yet")
+	case ir.VMinNum, ir.VMaxNum, ir.VMinimum, ir.VMaximum:
+		return x.minMax(c, in)
 	case ir.VCopySign:
 		if t != ir.TypeF32 {
-			return fmt.Errorf("f64 copysign is not lowered yet")
+			return x.copySign64(c, in)
 		}
 		// bfi: (mask & a) | (~mask & b), with the mask clearing the
 		// sign. VOP3 takes no literal on GFX9, so the mask is a move.
@@ -157,7 +182,7 @@ func (x *fnState) selectInst(c *cursor, in *ir.Inst) error {
 
 	// —— §A2 ——
 	case ir.VSAddO, ir.VUAddO, ir.VSSubO, ir.VSMulO, ir.VUMulO:
-		return fmt.Errorf("overflow predicates are not lowered yet")
+		return x.overflow(c, in)
 
 	// —— §A4 ——
 	case ir.VNot:
@@ -177,13 +202,19 @@ func (x *fnState) selectInst(c *cursor, in *ir.Inst) error {
 	case ir.VSShr:
 		return x.shift(c, in, "v_ashrrev")
 	case ir.VRotL, ir.VRotR:
+		if t == ir.TypeI64 {
+			return x.rotate64(c, in)
+		}
 		return x.rotate(c, in)
 
 	// —— §A6 ——
 	case ir.VClz, ir.VCtz, ir.VPopcnt:
+		if t == ir.TypeI64 {
+			return x.bits64(c, in)
+		}
 		return x.bits(c, in)
 	case ir.VBswap:
-		return fmt.Errorf("bswap is not lowered yet")
+		return x.bswap(c, in)
 
 	// —— §B ——
 	case ir.VEq, ir.VNe, ir.VSLt, ir.VULt, ir.VSLe, ir.VULe, ir.VLt, ir.VLe, ir.VUno:
@@ -248,27 +279,10 @@ func (x *fnState) selectInst(c *cursor, in *ir.Inst) error {
 		}
 		return x.unary(c, in, mn)
 	case ir.VSCvtI64, ir.VUCvtI64:
-		return fmt.Errorf("a 64-bit integer to float conversion is not lowered yet")
-	case ir.VSCvtSatF32, ir.VUCvtSatF32, ir.VSCvtSatF64, ir.VUCvtSatF64:
-		// v_cvt_i32_f32 clamps, and sends NaN to zero under DX10 clamp:
-		// §C2's saturating row exactly.
-		if t != ir.TypeI32 {
-			return fmt.Errorf("a float to 64-bit integer conversion is not lowered yet")
-		}
-		signed := op.Verb == ir.VSCvtSatF32 || op.Verb == ir.VSCvtSatF64
-		src := in.Arg(0).Type()
-		mn := "v_cvt_i32_f32"
-		switch {
-		case signed && src == ir.TypeF64:
-			mn = "v_cvt_i32_f64"
-		case !signed && src == ir.TypeF32:
-			mn = "v_cvt_u32_f32"
-		case !signed:
-			mn = "v_cvt_u32_f64"
-		}
-		return x.unary(c, in, mn)
-	case ir.VSCvtF32, ir.VUCvtF32, ir.VSCvtF64, ir.VUCvtF64:
-		return fmt.Errorf("the trapping conversion is a range test the divergent branch cannot yet express")
+		return x.int64ToFloat(c, in)
+	case ir.VSCvtSatF32, ir.VUCvtSatF32, ir.VSCvtSatF64, ir.VUCvtSatF64,
+		ir.VSCvtF32, ir.VUCvtF32, ir.VSCvtF64, ir.VUCvtF64:
+		return x.floatToInt(c, in)
 	case ir.VFCvtF32:
 		return x.unary(c, in, "v_cvt_f64_f32")
 	case ir.VFCvtF64:

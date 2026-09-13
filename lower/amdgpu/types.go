@@ -167,6 +167,9 @@ type opnd struct {
 	i    int   // Defs or Uses index
 	imm  int64 // immediate, offset, or wait count
 	sym  string
+
+	// VOP3 source modifiers on a use.
+	neg, abs bool
 }
 
 type opndKind uint8
@@ -179,6 +182,7 @@ const (
 	oDefLo                 // the low half of the pair Defs[i]
 	oDefHi
 	oImm     // an inline constant or literal
+	oFImm    // a float constant: imm holds the f32 bits
 	oVCC     // the VCC register
 	oExec    // the EXEC register
 	oM0      // M0
@@ -222,4 +226,9 @@ type (
 
 	// trapOp is s_trap 2.
 	trapOp struct{}
+
+	// trapIfOp traps the wave when any active lane's bit in the mask
+	// Uses[0] is set: s_and_b64 with exec, s_cbranch_scc1 to the one
+	// s_trap at the end of the function.
+	trapIfOp struct{}
 )
