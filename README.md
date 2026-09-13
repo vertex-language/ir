@@ -234,6 +234,24 @@ a virtual-register IR, so `lower/ptx` is instruction selection alone.
 Its tests lower a kernel, hand the text to the CUDA driver through
 `nvcuda.dll` — no toolkit, no cgo — launch it, and read the answer back.
 
+AMD is the same module with `ir.AMDGCN`, and the ending is an HSA code
+object — the `.hsaco` `hipModuleLoadData` takes — built by
+`lower/amdgpu` on the `amdgpu` repo's assembler, which encodes the
+GFX9 and CDNA instructions and writes the kernel descriptor and the
+metadata note. There *is* a register allocator on that path: the
+hardware has a fixed file of VGPRs and SGPRs, and a kernel's descriptor
+says how many of each it uses. Every call a kernel makes is inlined
+first, by `lower/inline`, since the device calling convention is not
+written yet.
+
+```go
+lower "github.com/vertex-language/ir/lower/amdgpu"
+objelf "github.com/vertex-language/amdgpu/obj/elf"
+
+o, err := lower.Lower(m, lower.Options{ASIC: feature.GFX942})
+err = objelf.WriteHSACO(w, o)
+```
+
 ---
 
 ## Where this sits
@@ -283,24 +301,24 @@ honest state of it rather than the intended one. A row that is not ✅ is
 refused by name at `Lower`, with the reason — never lowered as something
 else.
 
-| | amd64 | arm64 | i386 | ptx |
-|---|---|---|---|---|
-| §A · §A2 arithmetic, wide multiply, overflow predicates | ✅ | ✅ | ✅ | ✅ |
-| §A3 float arithmetic, at `f32`/`f64` | ✅ | ✅ | ✅ | ✅, and the approximate six |
-| §A4–§A7 bitwise, shifts, bit counting, constants | ✅ | ✅ | ✅ | ✅ |
-| §B comparisons | ✅ | ✅ | ✅ | ✅ |
-| §C–§C4 conversions | ✅ | ✅ | ✅ | ✅ |
-| §D · §D2 memory, sub-width memory | ✅ | ✅ | ✅ | ✅ natural alignment ⁵ |
-| §D3 pointer ops | all but `tlsaddr` | all but `tlsaddr` | all but `tlsaddr` | `alloc`, `alloca`, `getaddr`, `diff`, stack save/restore ⁶ |
-| §E bulk memory | ✅ non-`volatile` | ✅ non-`volatile` | ✅ non-`volatile` | ✅ as byte loops |
-| §F select | ✅ | ✅ | ✅ | ✅ |
-| §G · §G2 calls, terminators, computed branches | ✅ | ✅ | ✅ | all but `brind` ⁷ |
-| §G3 unwinding — `invoke`, `invokeind`, `resume` | — | Mach-O | — | — ⁸ |
-| §G4 inline assembly | — | — | — | `asm`; not `asm goto` |
-| §H atomics | ✅ | ✅ | ✅ | ✅ with scopes ⁹; not the narrow forms |
-| §I variadics | ✅ ¹ | Apple's variant only ² | ✅ | — ⁸ |
-| §W work-items, `barrier`, `shared`, the wave verbs | — | — | — | ✅ |
-| ext-float | `f128` ✅, `f80` — ³ | `f128` — ⁴ | `f80` — ³ | neither ⁸ |
+| | amd64 | arm64 | i386 | ptx | amdgpu |
+|---|---|---|---|---|---|
+| §A · §A2 arithmetic, wide multiply, overflow predicates | ✅ | ✅ | ✅ | ✅ | ✅ at `i32`; `i64` all but divide ¹⁰ |
+| §A3 float arithmetic, at `f32`/`f64` | ✅ | ✅ | ✅ | ✅, and the approximate six | ✅, and the approximate six |
+| §A4–§A7 bitwise, shifts, bit counting, constants | ✅ | ✅ | ✅ | ✅ | ✅ |
+| §B comparisons | ✅ | ✅ | ✅ | ✅ | ✅ |
+| §C–§C4 conversions | ✅ | ✅ | ✅ | ✅ | ✅ |
+| §D · §D2 memory, sub-width memory | ✅ | ✅ | ✅ | ✅ natural alignment ⁵ | ✅ natural alignment ⁵ |
+| §D3 pointer ops | all but `tlsaddr` | all but `tlsaddr` | all but `tlsaddr` | `alloc`, `alloca`, `getaddr`, `diff`, stack save/restore ⁶ | `getaddr`, `diff` ¹¹ |
+| §E bulk memory | ✅ non-`volatile` | ✅ non-`volatile` | ✅ non-`volatile` | ✅ as byte loops | — ¹¹ |
+| §F select | ✅ | ✅ | ✅ | ✅ | ✅ |
+| §G · §G2 calls, terminators, computed branches | ✅ | ✅ | ✅ | all but `brind` ⁷ | `br`, uniform `brif`, `return`, `trap`; calls inlined ¹¹ |
+| §G3 unwinding — `invoke`, `invokeind`, `resume` | — | Mach-O | — | — ⁸ | — ⁸ |
+| §G4 inline assembly | — | — | — | `asm`; not `asm goto` | — |
+| §H atomics | ✅ | ✅ | ✅ | ✅ with scopes ⁹; not the narrow forms | — ¹¹ |
+| §I variadics | ✅ ¹ | Apple's variant only ² | ✅ | — ⁸ | — ⁸ |
+| §W work-items, `barrier`, `shared`, the wave verbs | — | — | — | ✅ | the ids, `barrier`, `shared` storage ¹¹ |
+| ext-float | `f128` ✅, `f80` — ³ | `f128` — ⁴ | `f80` — ³ | neither ⁸ | neither ⁸ |
 
 1. Except `ptr.va_arg_ref` of an aggregate small enough to have been
    passed in registers, whose eightbytes are scattered through the save
@@ -328,6 +346,17 @@ else.
 9. From sm_70. Below it PTX has no scope qualifiers: `device` and
    `system` lower to the unscoped forms with `membar` where an acquire
    or release needs one, and `workgroup` is refused rather than widened.
+10. There is no 64-bit divide instruction and the expansion is a long
+    straight sequence LLVM's `LowerUDIVREM64` writes; it is not written
+    here yet, and the row is refused by name.
+11. `lower/amdgpu` lowers *uniform* kernels today: a branch whose
+    condition every lane agrees on is a scalar branch, and one whose
+    condition differs across the wave is refused by name until the
+    execution-mask lowering lands. Private memory (`alloc`, spilling),
+    atomics, bulk memory, the wave verbs and the device calling
+    convention are behind it in the same queue; the trap rows are not,
+    since a per-lane trap condition is a mask tested against `exec` and
+    one scalar branch.
 4. `f128` on amd64 is compiler-rt — §0 is explicit that a namespace the
    layout admits is usable whether or not silicon implements it, and
    that lowering supplies the call. Its §A3 rows are the arithmetic and
@@ -354,6 +383,16 @@ the call, which is a legalization pass and not a selection rule.
 
 Only `O0` exists. `Options.OptLevel` is there so the day there is a
 second level is not a signature change.
+
+`lower/amdgpu` is the fourth CPU-shaped backend in everything but its
+artifact: `mir`, `regalloc` over four classes — 32- and 64-bit VGPRs
+and SGPRs, the file split statically between singles and aligned pairs
+— and an `obj.Object` from the `amdgpu` repo whose `.hsaco` writer lays
+sections out the way `lld` does. What it has that the three do not is
+an `s_waitcnt` after every memory instruction, because memory on the
+device is asynchronous, and a uniformity analysis, because the hardware
+branches the whole wave or none of it. Its tests disassemble the code
+object under `llvm-objdump` and pin the listing.
 
 `lower/ptx` differs from the three in what it hands back and what it
 does not do. It returns a `*ptx.Module` — PTX is a virtual ISA and the
