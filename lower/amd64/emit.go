@@ -125,6 +125,13 @@ func shift64(text *amd64asm.Section, v ir.Verb, dst reg.R64) {
 	}
 }
 
+// chkstkSym is the Windows stack probe, and msProbeSize the frame size past
+// which a prologue calls it: one page, the size clang and MSVC probe beyond.
+const (
+	chkstkSym   = "__chkstk"
+	msProbeSize = 4096
+)
+
 // emitPrologue opens the frame, if there is one.
 // Emitted here since the frame size is not known until after register allocation.
 //
@@ -132,7 +139,7 @@ func shift64(text *amd64asm.Section, v ir.Verb, dst reg.R64) {
 // prologue described in .xdata before anything can unwind through the frame,
 // and the description has to come from here rather than from a reader of the
 // bytes: see unwind.go.
-func emitPrologue(text *amd64asm.Section, fn *ir.Func, fr *frame, saved []reg.R64) prologueShape {
+func emitPrologue(am *amd64asm.Module, text *amd64asm.Section, fn *ir.Func, fr *frame, saved []reg.R64) prologueShape {
 	if !fr.needed() {
 		return prologueShape{}
 	}
@@ -148,7 +155,22 @@ func emitPrologue(text *amd64asm.Section, fn *ir.Func, fr *frame, saved []reg.R6
 		// could subtract in four bytes rather than seven, and choosing
 		// between them by the value is a peephole, which this package
 		// has nowhere to put.
-		text.SubRM64Imm32(reg.RSP, int64(fr.size()))
+		if n := fr.size(); fn.Module().Layout().ABI == abiMS && n > msProbeSize {
+			// Windows commits a thread's stack a page at a time, behind a
+			// guard page that has to be touched in order: a frame more
+			// than a page deep that skipped it would fault on its first
+			// write below. __chkstk touches each page of the frame first,
+			// taking the size in RAX and clobbering nothing else the
+			// calling convention does not already allow -- clang's and
+			// MSVC's prologue, byte for byte. The unwind code is still one
+			// allocation, ending where the subtract does.
+			am.Extern(chkstkSym)
+			text.MovR32Imm32(reg.EAX, int64(n))
+			text.CallRef(amd64asm.Ref(chkstkSym, amd64asm.RefPLT32))
+			text.SubRM64R64(reg.RSP, reg.RAX)
+		} else {
+			text.SubRM64Imm32(reg.RSP, int64(fr.size()))
+		}
 		p.alloc, p.allocAt = fr.size(), text.Offset()-base
 	}
 	// The callee-saved registers go into frame slots rather than onto
@@ -414,7 +436,7 @@ func emit(am *amd64asm.Module, text *amd64asm.Section, fn *ir.Func, mf *mir.Func
 		switch {
 		case i == 0:
 			text.Label(fn.Name(), funcBinding(fn), amd64asm.Func)
-			shape = emitPrologue(text, fn, fr, saved)
+			shape = emitPrologue(am, text, fn, fr, saved)
 		case labeled[mb.Label]:
 			text.Label(mb.Label, amd64asm.Local)
 		default:

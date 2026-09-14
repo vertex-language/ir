@@ -220,6 +220,39 @@ int main(void) { printf("%ld %ld\n", maxstore(42, 7), maxstore(7, 42)); return 0
 	}
 }
 
+// A frame too deep for one subtract-immediate: 5600 bytes takes a shifted
+// subtract and a plain one, and 70000 bytes a shifted one past a single page
+// multiple. Values stored at the top and the bottom of each have to come back,
+// which they would not if SP stopped short of the locals below it and the
+// call in between wrote over them.
+func TestRunLargeFrame(t *testing.T) {
+	m := ir.NewModule("t", ir.AArch64Linux)
+	for _, c := range []struct {
+		name string
+		size uint64
+	}{{"_deep5600", 5600}, {"_deep70000", 70000}} {
+		fn := m.Func(c.name).Export()
+		a := fn.ParamI64("a")
+		fn.ReturnsI64()
+		entry := fn.Entry()
+		top := entry.Ptr.Alloc(8, 8)
+		big := entry.Ptr.Alloc(c.size, 8)
+		entry.I64.Store(a, top)
+		entry.I64.Store(entry.I64.Add(a, a), big)
+		entry.Return(entry.I64.Add(entry.I64.Load(top), entry.I64.Load(big)))
+	}
+
+	got := runNative(t, m, `
+#include <stdio.h>
+long deep5600(long);
+long deep70000(long);
+int main(void) { printf("%ld %ld\n", deep5600(14), deep70000(5)); return 0; }
+`)
+	if got != "42 15\n" {
+		t.Errorf("printed %q, want %q", got, "42 15\n")
+	}
+}
+
 // A global, its address, and a load through it.
 func TestRunGlobal(t *testing.T) {
 	m := ir.NewModule("t", ir.AArch64Linux)

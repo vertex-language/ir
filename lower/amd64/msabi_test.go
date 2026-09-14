@@ -206,6 +206,47 @@ func TestMSEmitsUnwindData(t *testing.T) {
 	}
 }
 
+// TestMSProbesADeepFrame. Windows commits a stack a page at a time behind a
+// guard page, so a frame more than a page deep is taken the way clang and
+// MSVC take it — the size in EAX, a call to __chkstk, then SUB RSP, RAX —
+// and a frame of a page or less is a plain subtract.
+func TestMSProbesADeepFrame(t *testing.T) {
+	probe := []byte{0x48, 0x29, 0xc4} // sub rsp, rax
+	for _, c := range []struct {
+		size  uint64
+		probe bool
+	}{{8000, true}, {64, false}} {
+		m := ir.NewModule("t", ir.X86_64Windows)
+		fn := m.Func("f").Export()
+		fn.ReturnsI64()
+		e := fn.Entry()
+		slot := e.Ptr.Alloc(c.size, 8)
+		e.I64.Store(e.I64.Const(42), slot)
+		e.Return(e.I64.Load(slot))
+
+		f := lowerMS(t, m)
+		var text []byte
+		for _, s := range f.Sections {
+			if s.Name == ".text" {
+				data, err := s.Data()
+				if err != nil {
+					t.Fatalf(".text Data: %v", err)
+				}
+				text = data
+			}
+		}
+		at := bytes.Index(text, probe)
+		switch {
+		case c.probe && at < 10:
+			t.Errorf("a %d-byte frame has no SUB RSP, RAX after a probe:\n% x", c.size, text)
+		case c.probe && (text[at-10] != 0xb8 || text[at-5] != 0xe8):
+			t.Errorf("a %d-byte frame is not MOV EAX, imm32; CALL rel32; SUB RSP, RAX:\n% x", c.size, text)
+		case !c.probe && at >= 0:
+			t.Errorf("a %d-byte frame was probed:\n% x", c.size, text)
+		}
+	}
+}
+
 // TestMSRejectsLongDouble. long double is not a Microsoft type — MSVC makes it
 // a double — so a module that asks to pass one is refused rather than given a
 // placement invented here.

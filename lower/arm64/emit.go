@@ -452,8 +452,22 @@ func emitPrologue(text *arm64asm.Section, fr *frame, sv saves) {
 	}
 	text.StpPre64(reg.X29, reg.X30, arm64asm.Mem64(reg.SP).Pre(-16))
 	text.MovSp64(reg.X29, reg.SP)
-	if n := fr.size(); n > 0 {
-		text.SubImm64(reg.SP, reg.SP, int64(n))
+	// A subtract-immediate states twelve bits, shifted left by twelve or
+	// not, so a frame of more than 4095 bytes comes off SP in more than one:
+	// the multiple of 4096 first and then the rest, which is how clang
+	// writes it. Nothing reads SP between them, the epilogue puts SP back
+	// from X29 rather than by adding, and a frame-mode unwind encoding does
+	// not state the size, so the split changes nothing else.
+	for n := int64(fr.size()); n > 0; {
+		step := n & 0xfff
+		if n > 0xfff {
+			step = n &^ 0xfff
+			if step > 0xfff000 {
+				step = 0xfff000
+			}
+		}
+		text.SubImm64(reg.SP, reg.SP, step)
+		n -= step
 	}
 	for _, r := range sv.x {
 		b, o := frameBase(text, fr.saveAt[r])
