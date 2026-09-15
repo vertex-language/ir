@@ -405,6 +405,11 @@ func (f *Func) ret(t RegType, attrs []ParamAttr) *Func {
 		return f
 	}
 	for _, a := range attrs {
+		// swifterror names the result that leaves in the error
+		// register, as Sig.Ret says for an import.
+		if a.kind == paSwiftError && t == TypePtr {
+			continue
+		}
 		if a.kind != paZExt && a.kind != paSExt {
 			f.m.fail(f.name, "", Op{}, ErrPlacement, "%s on a result", a)
 			return f
