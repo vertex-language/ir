@@ -419,6 +419,14 @@ func (f *Func) ParamV128(name string, a ...ParamAttr) V128 {
 }
 func (f *Func) ParamPtr(name string, a ...ParamAttr) Ptr { return Ptr{f.param(TypePtr, name, a)} }
 
+// ParamOf declares a parameter whose register type is worked out rather
+// than written down, which is what a pass copying one signature into
+// another has. The typed ParamI64 and its siblings are the ordinary way
+// to declare one.
+func (f *Func) ParamOf(t RegType, name string, a ...ParamAttr) Value {
+	return Wrap(f.param(t, name, a))
+}
+
 // ret appends a ret-item. Called twice, it declares a multi-value result.
 func (f *Func) ret(t RegType, attrs []ParamAttr) *Func {
 	if f.m.err != nil {
