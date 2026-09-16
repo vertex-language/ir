@@ -735,6 +735,8 @@ func emitCallSeq(c *cursor, vr *vregs, places []place,
 			dst = site.intReg(reg.X8, pl.w)
 		case placeSelf:
 			dst = site.intReg(reg.X20, pl.w)
+		case placeAsync:
+			dst = site.intReg(reg.X22, pl.w)
 		default:
 			dst = site.intReg(aapcsIntArgs[pl.i], pl.w)
 		}

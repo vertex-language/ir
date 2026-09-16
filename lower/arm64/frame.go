@@ -457,6 +457,16 @@ func classifyAAPCS(args []abiArg, sret ir.FType) ([]place, error) {
 			out[i] = place{kind: placeSelf, w: w}
 			continue
 		}
+		// The async context register, beside the sequence for the same
+		// reason the self register is.
+		if a.async {
+			w, ok := widthOf(a.t)
+			if !ok {
+				return nil, fmt.Errorf("%s is not a value the async context register carries", a.t)
+			}
+			out[i] = place{kind: placeAsync, w: w}
+			continue
+		}
 
 		if a.byval.IsZero() {
 			w, ok := widthOf(a.t)
@@ -548,6 +558,9 @@ type abiArg struct {
 	t     ir.RegType
 	byval ir.FType
 	self  bool
+	// async is the async context pointer, which goes in X22 by
+	// declaration rather than by size. See ir.SwiftAsync.
+	async bool
 	// out is the indirect-result pointer, which goes in X8 by
 	// declaration rather than by size. See ir.SwiftIndirectResult.
 	out bool
@@ -569,6 +582,17 @@ func scalarArgs(types []ir.RegType) []abiArg {
 func outOf(attrs []ir.ParamAttr) bool {
 	for _, a := range attrs {
 		if a.IsSwiftIndirectResult() {
+			return true
+		}
+	}
+	return false
+}
+
+// asyncOf reports whether a parameter carries an async context, and so
+// travels in the async context register.
+func asyncOf(attrs []ir.ParamAttr) bool {
+	for _, a := range attrs {
+		if a.IsSwiftAsync() {
 			return true
 		}
 	}
@@ -608,6 +632,7 @@ func paramArgs(fn *ir.Func) []abiArg {
 		if i < len(ps) {
 			out[i].byval = byvalOf(ps[i].Attrs)
 			out[i].self = selfOf(ps[i].Attrs)
+			out[i].async = asyncOf(ps[i].Attrs)
 			out[i].out = outOf(ps[i].Attrs)
 		}
 	}
@@ -633,6 +658,7 @@ func sigArgSpec(sig *ir.Sig, args []*ir.Def) []abiArg {
 		if i < len(ps) {
 			out[i].byval = byvalOf(ps[i].Attrs)
 			out[i].self = selfOf(ps[i].Attrs)
+			out[i].async = asyncOf(ps[i].Attrs)
 			out[i].out = outOf(ps[i].Attrs)
 		}
 	}
@@ -710,6 +736,8 @@ func classifyParams(fn *ir.Func, entry *mir.Block, vr *vregs, fr *frame) error {
 			incoming = vr.physical(reg.X8, pl.w)
 		case placeSelf:
 			incoming = vr.physical(reg.X20, pl.w)
+		case placeAsync:
+			incoming = vr.physical(reg.X22, pl.w)
 		default:
 			incoming = vr.physical(aapcsIntArgs[pl.i], pl.w)
 		}

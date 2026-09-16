@@ -491,6 +491,13 @@ const (
 	// does not look, and the callee reads whatever was in X20 -- which
 	// compiles, links and answers.
 	placeSelf
+
+	// placeAsync is X22, Swift's async context register. Like placeSelf
+	// it is beside the argument sequence rather than in it: an async
+	// function's first ordinary argument is still X0, and the context
+	// costs no argument register. It is what a suspended function has
+	// instead of a stack -- see ir.SwiftAsync.
+	placeAsync
 )
 
 // A regSlot is one register of an aggregate that travels in several: which

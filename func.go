@@ -43,6 +43,7 @@ const (
 	paSwiftSelf
 	paSwiftError
 	paSwiftOut
+	paSwiftAsync
 )
 
 // A ParamAttr is a param-attr or a ret-attr (§6). ZExt and SExt are the two a
@@ -104,6 +105,23 @@ var (
 	// So this is a statement and not a hint, the way SwiftSelf is: the
 	// register is X8 because the declaration says so.
 	SwiftIndirectResult = ParamAttr{kind: paSwiftOut}
+
+	// SwiftAsync marks the parameter carrying an async function's
+	// context: the frame holding everything that has to survive a
+	// suspension, and the chain back to the caller's.
+	//
+	// Swift's async functions do not keep their state on the stack,
+	// because a suspended one has no stack -- it has given its thread
+	// back. What it has instead is this pointer, and a frame reached
+	// through it that the task's allocator owns. So the register is
+	// the one thing every piece of a split function is handed, and it
+	// is the first thing each of them reads.
+	//
+	// The same statement SwiftSelf is, for the same reason: AAPCS64 has
+	// no such register, the two sides have to agree, and the only way
+	// to agree is to say so in the signature. On AArch64 it is X22,
+	// which is what swiftc emits.
+	SwiftAsync = ParamAttr{kind: paSwiftAsync}
 )
 
 // ByVal passes the aggregate the pointer names by value.
@@ -121,6 +139,10 @@ func (a ParamAttr) IsNoAlias() bool { return a.kind == paNoAlias }
 
 // IsSwiftSelf reports whether this parameter travels in the self register.
 func (a ParamAttr) IsSwiftSelf() bool { return a.kind == paSwiftSelf }
+
+// IsSwiftAsync reports whether this parameter carries an async
+// function's context, and so travels in the async context register.
+func (a ParamAttr) IsSwiftAsync() bool { return a.kind == paSwiftAsync }
 
 // IsSwiftError reports whether this result travels in the error
 // register.
@@ -150,6 +172,8 @@ func (a ParamAttr) String() string {
 		return "swifterror"
 	case paSwiftOut:
 		return "swiftindirect"
+	case paSwiftAsync:
+		return "swiftasync"
 	}
 	return ""
 }
