@@ -575,6 +575,76 @@ func iselCall(c *cursor, vr *vregs, in *ir.Inst, opts Options) error {
 	return iselCallSeq(c, vr, what, sig, in.Args(), in.Results(), nil, callOp{sym: sym.Name()}, opts)
 }
 
+// iselTailCall lowers a call that replaces this frame with the callee's.
+//
+// The arguments are placed exactly as an ordinary call's, and then the
+// frame comes down and control branches rather than links. That order is
+// safe because the two sets do not overlap: the teardown restores only
+// callee-saved registers and SP, and no argument travels in one.
+//
+// A callee with arguments on the stack is refused. Placing them would
+// mean writing into this function's own incoming area, which is only
+// sound when it is at least as large -- a rule worth having when there
+// is a caller that needs it. Every tail call an async function makes
+// passes its context and little else.
+func iselTailCall(c *cursor, vr *vregs, in *ir.Inst, opts Options) error {
+	sym := in.Symbol()
+	if sym == nil {
+		return fmt.Errorf("tail_call: no callee named")
+	}
+	what := "tail_call @" + sym.Name()
+	var sig *ir.Sig
+	if callee := in.Callee(); callee != nil {
+		sig = callee.Signature()
+	}
+	if err := tailArgsFitRegisters(what, sig, in.Args(), opts); err != nil {
+		return err
+	}
+	return iselCallSeqTo(c, vr, what, sig, in.Args(), nil, nil, tailOp{sym: sym.Name()}, opts, -1)
+}
+
+// iselTailCallInd is iselTailCall through a pointer.
+func iselTailCallInd(c *cursor, vr *vregs, in *ir.Inst, opts Options) error {
+	addr, ok := vr.lookup(in.Arg(0))
+	if !ok {
+		return fmt.Errorf("tail_callind: callee defined outside the function")
+	}
+	var sig *ir.Sig
+	if t := in.NamedType(); t != nil {
+		sig = t.Sig()
+	}
+	args := in.Args()[1:]
+	if err := tailArgsFitRegisters("tail_callind", sig, args, opts); err != nil {
+		return err
+	}
+	// X16 is the intra-procedure scratch register: the allocator never
+	// hands it out, and the teardown does not restore it, so the target
+	// is still there after the frame has gone.
+	target := vr.physical(reg.X16, w64)
+	emitCopy(c, target, addr, w64)
+	return iselCallSeqTo(c, vr, "tail_callind", sig, args, nil, []mir.VReg{target}, tailIndOp{}, opts, -1)
+}
+
+// tailArgsFitRegisters reports whether every argument of a tail call is
+// placed in a register, which is the only shape this package tail-calls.
+func tailArgsFitRegisters(what string, sig *ir.Sig, args []*ir.Def, opts Options) error {
+	named := len(args)
+	variadic := false
+	if sig != nil && sig.IsVariadic() {
+		variadic, named = true, len(sig.Params())
+	}
+	places, err := classifyCall(sigArgSpec(sig, args), named, variadic, opts.Variadic, sretOf(sig))
+	if err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	for i, pl := range places {
+		if pl.kind == placeStack {
+			return fmt.Errorf("%s: argument %d is passed on the stack, which this package does not tail call", what, i)
+		}
+	}
+	return nil
+}
+
 // iselCallInd lowers §G's indirect call, whose convention comes from the
 // named func type rather than from a declaration.
 func iselCallInd(c *cursor, vr *vregs, in *ir.Inst, opts Options) error {

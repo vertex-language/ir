@@ -535,7 +535,7 @@ func (pr *printer) inst(in *ir.Inst) {
 	op := in.Op()
 	if op.IsBare() {
 		switch op.Verb {
-		case ir.VCall, ir.VCallInd:
+		case ir.VCall, ir.VCallInd, ir.VTailCall, ir.VTailCallInd:
 			pr.call(in)
 			pr.attached(in.Attached())
 			return
@@ -630,14 +630,22 @@ func (pr *printer) argList(args []*ir.Def) {
 
 func (pr *printer) call(in *ir.Inst) {
 	pr.results(in)
-	if in.Op().Verb == ir.VCall {
+	switch in.Op().Verb {
+	case ir.VCall:
 		pr.f("call @%s", in.Callee().Name())
 		pr.argList(in.Args())
-		return
+	case ir.VTailCall:
+		pr.f("tail_call @%s", in.Callee().Name())
+		pr.argList(in.Args())
+	case ir.VTailCallInd:
+		args := in.Args()
+		pr.f("tail_callind %%%s : @%s", pr.reg(args[0]), in.NamedType().Name())
+		pr.argList(args[1:])
+	default:
+		args := in.Args()
+		pr.f("callind %%%s : @%s", pr.reg(args[0]), in.NamedType().Name())
+		pr.argList(args[1:])
 	}
-	args := in.Args()
-	pr.f("callind %%%s : @%s", pr.reg(args[0]), in.NamedType().Name())
-	pr.argList(args[1:])
 }
 
 func (pr *printer) term(in *ir.Inst) {

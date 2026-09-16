@@ -245,6 +245,17 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 			case callIndOp:
 				text.Blr(x(in.Uses[0]))
 
+			case tailOp:
+				emitTeardown(text, fr, sv, carried(in, x))
+				text.B(arm64asm.Ref(op.sym, arm64asm.RefCall26))
+
+			case tailIndOp:
+				// The target is in X16 already: an intra-procedure
+				// scratch register, which the teardown does not
+				// restore and the allocator never hands out.
+				emitTeardown(text, fr, sv, carried(in, x))
+				text.Br(reg.X16)
+
 			case divOp:
 				if op.w == w32 {
 					if op.signed {
@@ -485,19 +496,57 @@ func emitPrologue(text *arm64asm.Section, fr *frame, sv saves) {
 // frame size, which is the same instruction count and is right whether or not
 // anything moved SP in between.
 func emitEpilogue(text *arm64asm.Section, fr *frame, sv saves) {
-	if fr.needed() {
-		for _, r := range sv.restore {
-			b, o := frameBase(text, fr.saveAt[r])
-			text.LdurImm64(r, arm64asm.Mem64(b).Off(o))
-		}
-		for _, r := range sv.v {
-			b, o := frameBase(text, fr.saveAtVec[r])
-			text.LdurImmD(reg.D(r), arm64asm.Mem64(b).Off(o))
-		}
-		text.MovSp64(reg.SP, reg.X29)
-		text.LdpPost64(reg.X29, reg.X30, arm64asm.Mem64(reg.SP).Post(16))
-	}
+	emitTeardown(text, fr, sv, nil)
 	text.Ret()
+}
+
+// carried is the registers a tail call's arguments are sitting in when
+// its teardown runs.
+//
+// Almost all of them are argument registers, which no epilogue touches.
+// The ones that matter are Swift's: a receiver travels in X20 and an
+// async context in X22, both of which AAPCS64 calls callee-saved. If the
+// teardown restored those it would put this function's saved copy back
+// over the argument it had just placed, and the callee would read the
+// wrong thing -- which is a silent wrong answer, not a crash.
+//
+// They are not restored, and that is the convention rather than a hole
+// in it: a value passed forward in one of these registers is passed
+// forward, and the callee owes it to whoever it returns to.
+func carried(in mir.Instr, x func(mir.VReg) reg.X) map[reg.X]bool {
+	if len(in.Uses) == 0 {
+		return nil
+	}
+	out := make(map[reg.X]bool, len(in.Uses))
+	for _, u := range in.Uses {
+		out[x(u)] = true
+	}
+	return out
+}
+
+// emitTeardown is the epilogue without the return: the callee-saved
+// registers back, SP back, the frame record popped.
+//
+// A tail call needs exactly this and then a branch. The arguments are
+// already placed when it runs, which is safe because everything it
+// touches is callee-saved and every argument register is not.
+func emitTeardown(text *arm64asm.Section, fr *frame, sv saves, skip map[reg.X]bool) {
+	if !fr.needed() {
+		return
+	}
+	for _, r := range sv.restore {
+		if skip[r] {
+			continue
+		}
+		b, o := frameBase(text, fr.saveAt[r])
+		text.LdurImm64(r, arm64asm.Mem64(b).Off(o))
+	}
+	for _, r := range sv.v {
+		b, o := frameBase(text, fr.saveAtVec[r])
+		text.LdurImmD(reg.D(r), arm64asm.Mem64(b).Off(o))
+	}
+	text.MovSp64(reg.SP, reg.X29)
+	text.LdpPost64(reg.X29, reg.X30, arm64asm.Mem64(reg.SP).Post(16))
 }
 
 // usedCalleeSaved is the callee-saved registers this function's allocation

@@ -121,6 +121,10 @@ func iselBlock(fn *ir.Func, mf *mir.Func, vr *vregs, fr *frame, blk *ir.Block, m
 		return nil
 	case ir.VReturn:
 		return iselReturn(fn, c, vr, term)
+	case ir.VTailCall:
+		return iselTailCall(c, vr, term, opts)
+	case ir.VTailCallInd:
+		return iselTailCallInd(c, vr, term, opts)
 	case ir.VAsmGoto:
 		return iselAsmGoto(fn, mf, c, vr, term)
 	case ir.VInvoke, ir.VInvokeInd:

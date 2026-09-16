@@ -36,6 +36,58 @@ func (b *Builder) CallInd(p Ptr, t *Type, args ...Value) Results {
 	return b.results(op, in)
 }
 
+// TailCall replaces this frame with the callee's and branches: the callee
+// returns to this function's caller rather than here. It ends the block.
+//
+// The callee's results must be this function's results, because they are
+// handed straight back -- a tail call is a return whose value another
+// function computes. Everything an async function does is one of these.
+func (b *Builder) TailCall(fn Callee, args ...Value) {
+	op := Op{TypeNone, VTailCall}
+	if fn == nil {
+		b.fail(op, ErrPoison, "no callee named")
+		return
+	}
+	sig := fn.Signature()
+	if !b.checkArgs(op, sig, args) || !b.checkTailResults(op, sig) {
+		return
+	}
+	b.emit(op, nil, defsOf(args), &imm{callee: fn, sym: fn})
+}
+
+// TailCallInd is TailCall through a pointer.
+func (b *Builder) TailCallInd(p Ptr, t *Type, args ...Value) {
+	op := Op{TypeNone, VTailCallInd}
+	sig := b.funcTypeSig(op, t)
+	if sig == nil || !b.checkArgs(op, sig, args) || !b.checkTailResults(op, sig) {
+		return
+	}
+	b.emit(op, nil, append([]*Def{p.d}, defsOf(args)...), &imm{typ: t})
+}
+
+// checkTailResults reports whether a callee's results are the ones this
+// function returns. They have to be: the callee returns to this
+// function's caller, which is expecting this function's signature.
+func (b *Builder) checkTailResults(op Op, sig *Sig) bool {
+	f := b.blk.fn
+	if f == nil {
+		return false
+	}
+	if len(sig.rets) != len(f.sig.rets) {
+		b.fail(op, ErrArity, "callee returns %d values, this function returns %d",
+			len(sig.rets), len(f.sig.rets))
+		return false
+	}
+	for i, r := range sig.rets {
+		if r.Type != f.sig.rets[i].Type {
+			b.fail(op, ErrType, "callee result %d is %s, this function returns %s",
+				i, r.Type, f.sig.rets[i].Type)
+			return false
+		}
+	}
+	return true
+}
+
 func (b *Builder) funcTypeSig(op Op, t *Type) *Sig {
 	if t == nil {
 		b.fail(op, ErrPoison, "no func type named")

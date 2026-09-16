@@ -285,6 +285,15 @@ type (
 	// emits no instruction, and records the landing pad's address.
 	padEntryOp struct{ pad int }
 
+	// tailOp is a call that replaces this frame rather than building one
+	// on it: the frame comes down and control branches, so the callee
+	// returns to this function's caller. See ir.VTailCall.
+	tailOp struct{ sym string }
+
+	// tailIndOp is tailOp through a pointer, which is in X16 by the time
+	// it emits.
+	tailIndOp struct{}
+
 	// callOp names the callee, with arguments and clobbers pinned.
 	callOp struct{ sym string }
 
