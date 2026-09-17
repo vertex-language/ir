@@ -290,8 +290,8 @@ type (
 	// returns to this function's caller. See ir.VTailCall.
 	tailOp struct{ sym string }
 
-	// tailIndOp is tailOp through a pointer, which is in X16 by the time
-	// it emits.
+	// tailIndOp is tailOp through a pointer, which is in X17 by the time
+	// it runs.
 	tailIndOp struct{}
 
 	// callOp names the callee, with arguments and clobbers pinned.

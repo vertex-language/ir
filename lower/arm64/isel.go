@@ -617,10 +617,12 @@ func iselTailCallInd(c *cursor, vr *vregs, in *ir.Inst, opts Options) error {
 	if err := tailArgsFitRegisters("tail_callind", sig, args, opts); err != nil {
 		return err
 	}
-	// X16 is the intra-procedure scratch register: the allocator never
+	// X17 is the intra-procedure scratch register: the allocator never
 	// hands it out, and the teardown does not restore it, so the target
-	// is still there after the frame has gone.
-	target := vr.physical(reg.X16, w64)
+	// is still there after the frame has gone. X16 cannot be used here
+	// because frameBase uses X16 for frame accesses with offsets that
+	// exceed unscaled reach.
+	target := vr.physical(reg.X17, w64)
 	emitCopy(c, target, addr, w64)
 	return iselCallSeqTo(c, vr, "tail_callind", sig, args, nil, []mir.VReg{target}, tailIndOp{}, opts, -1)
 }

@@ -250,11 +250,12 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 				text.B(arm64asm.Ref(op.sym, arm64asm.RefCall26))
 
 			case tailIndOp:
-				// The target is in X16 already: an intra-procedure
+				// The target is in X17 already: an intra-procedure
 				// scratch register, which the teardown does not
-				// restore and the allocator never hands out.
+				// restore, the allocator never hands out, and
+				// frameBase (which uses X16) does not clobber.
 				emitTeardown(text, fr, sv, carried(in, x))
-				text.Br(reg.X16)
+				text.Br(reg.X17)
 
 			case divOp:
 				if op.w == w32 {

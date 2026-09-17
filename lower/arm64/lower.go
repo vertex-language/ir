@@ -159,10 +159,19 @@ func Lower(m *ir.Module, opts Options) (*arm64obj.Object, error) {
 
 	am := arm64asm.NewModule(arm64asm.WithFeatures(opts.features()))
 
+	// A weak import is a reference the link may leave unresolved.
 	for _, f := range m.FuncImports() {
+		if f.IsWeak() {
+			am.ExternWeak(f.Name())
+			continue
+		}
 		am.Extern(f.Name())
 	}
 	for _, g := range m.GlobalImports() {
+		if g.IsWeak() {
+			am.ExternWeak(g.Name())
+			continue
+		}
 		am.Extern(g.Name())
 	}
 	for _, s := range libcallSyms(m, opts) {
