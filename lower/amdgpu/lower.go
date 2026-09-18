@@ -19,6 +19,12 @@
 //     call a kernel makes is inlined first, by lower/inline, and what
 //     remains — a call through a pointer, a call to an import — is
 //     refused. Lower rewrites the module it is given to do this.
+//   - 29, the rows that are not one instruction; see seq.go.
+//   - 30 and 31, divergent control flow. A function with a branch whose
+//     condition differs across the wave is structurized after selection
+//     — every block behind a flow that narrows exec to the lanes whose
+//     predicate is set — and its branches become predicate assignments;
+//     see structurize.go. An irreducible CFG is refused by name.
 //
 // # What is different about this target
 //
@@ -189,7 +195,7 @@ func (l *lowerer) lowerFunc(fn *ir.Func) error {
 	if err != nil {
 		return err
 	}
-	x := &fnState{l: l, fn: fn, mf: mf, vr: vr, uni: uni, k: k}
+	x := &fnState{l: l, fn: fn, mf: mf, vr: vr, uni: uni, k: k, divergent: uni.anyDivergentBranch(fn)}
 	if err := x.entry(mbs[0]); err != nil {
 		return fmt.Errorf("lower: @%s: %w", fn.Name(), err)
 	}
@@ -215,7 +221,7 @@ func (l *lowerer) lowerFunc(fn *ir.Func) error {
 			return nil
 		}
 		done[i] = true
-		c := newCursor(fn, mf, mbs[i])
+		c := x.cursor(mbs[i])
 		if err := x.selectBlock(c, blk); err != nil {
 			return fmt.Errorf("lower: @%s: @%s: %w", fn.Name(), blk.Label(), err)
 		}
@@ -232,6 +238,14 @@ func (l *lowerer) lowerFunc(fn *ir.Func) error {
 		}
 	}
 
+	if x.divergent {
+		// The entry keeps the kernel's own label for the unstructurized
+		// layout; structurized, a flow block comes first and takes it.
+		mbs[0].Label = fn.Name() + ".entry"
+		if err := x.structurize(); err != nil {
+			return fmt.Errorf("lower: @%s: %w", fn.Name(), err)
+		}
+	}
 	assigned, err := regalloc.Assign(mf, pool)
 	if err != nil {
 		return fmt.Errorf("lower: @%s: %w; spilling needs scratch memory, which is not set up yet", fn.Name(), err)

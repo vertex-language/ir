@@ -14,10 +14,14 @@ type cursor struct {
 	blk  *mir.Block
 	base string
 	n    int
+
+	// masked says the function will be structurized, so an i1 copy
+	// must keep the bits of lanes it is not copying for.
+	masked bool
 }
 
-func newCursor(fn *ir.Func, mf *mir.Func, blk *mir.Block) *cursor {
-	return &cursor{fn: fn, mf: mf, blk: blk, base: blk.Label}
+func (x *fnState) cursor(blk *mir.Block) *cursor {
+	return &cursor{fn: x.fn, mf: x.mf, blk: blk, base: blk.Label, masked: x.divergent}
 }
 
 func (c *cursor) Emit(in mir.Instr) { c.blk.Emit(in) }
@@ -37,8 +41,14 @@ func blockLabel(fn *ir.Func, blk *ir.Block) string {
 }
 
 // emitCopy is a register-to-register move, marked as a copy so the
-// allocator can coalesce it away.
+// allocator can coalesce it away — except a lane mask in a function
+// that will be structurized, which is a read-modify-write under exec
+// and cannot share a register with its source.
 func emitCopy(c *cursor, dst, src mir.VReg, w width) {
+	if c.masked && w == s64 {
+		c.Emit(mir.Instr{Op: movOp{w: w, masked: true}, Defs: []mir.VReg{dst}, Uses: []mir.VReg{src, dst}})
+		return
+	}
 	c.Emit(mir.Instr{Op: movOp{w: w}, Defs: []mir.VReg{dst}, Uses: []mir.VReg{src}, Copy: true})
 }
 
@@ -68,11 +78,10 @@ func (x *fnState) selectTerm(c *cursor, in *ir.Inst) error {
 		c.mf.Succ(c.blk, dest)
 
 	case ir.VBrIf:
-		cond := in.Arg(0)
-		if !x.uni.isUniform(cond) {
-			return fmt.Errorf("the condition differs across the wave; a divergent branch needs the execution mask, which is not lowered yet")
-		}
-		m, err := x.vr.use(cond)
+		// Uniform or not: a cbranchOp is a scalar branch on the mask
+		// when the function has no divergent branch, and a predicate
+		// assignment once it is structurized.
+		m, err := x.vr.use(in.Arg(0))
 		if err != nil {
 			return err
 		}
@@ -122,7 +131,7 @@ func (x *fnState) edgeTarget(c *cursor, t ir.BlockTarget, kind string) (string, 
 		return dest, nil
 	}
 	edge := c.open(kind)
-	ec := newCursor(x.fn, x.mf, edge)
+	ec := x.cursor(edge)
 	x.emitParallelCopy(ec, moves)
 	ec.Emit(mir.Instr{Op: branchOp{target: dest}})
 	x.mf.Succ(edge, dest)

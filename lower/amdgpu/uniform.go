@@ -120,3 +120,14 @@ func (u *uniformity) readOnly(p *ir.Def) bool {
 
 // isUniform reports whether d holds one value across the wave.
 func (u *uniformity) isUniform(d *ir.Def) bool { return u.uniform[d] }
+
+// anyDivergentBranch reports whether some brif in f branches on a value
+// that differs across the wave.
+func (u *uniformity) anyDivergentBranch(f *ir.Func) bool {
+	for _, blk := range f.Blocks() {
+		if t := blk.Term(); t != nil && t.Op().Verb == ir.VBrIf && !u.isUniform(t.Arg(0)) {
+			return true
+		}
+	}
+	return false
+}

@@ -210,8 +210,14 @@ func (o amdOp) String() string { return o.mn }
 // The few opcodes that are not one instruction: control flow that the
 // cursor reads, and copies the allocator coalesces.
 type (
-	// movOp copies Uses[0] to Defs[0], a mir copy at width w.
-	movOp struct{ w width }
+	// movOp copies Uses[0] to Defs[0], a mir copy at width w. A masked
+	// one is an s64 copy under the execution mask — read-modify-write,
+	// Uses[1] the destination — which a structurized function needs for
+	// every lane mask that crosses a region; see structurize.go.
+	movOp struct {
+		w      width
+		masked bool
+	}
 
 	// branchOp is s_branch to a label.
 	branchOp struct{ target string }

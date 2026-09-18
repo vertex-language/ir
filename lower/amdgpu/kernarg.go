@@ -147,6 +147,11 @@ type fnState struct {
 	uni *uniformity
 	k   *kernelPlan
 
+	// divergent says some brif's condition differs across the wave: the
+	// function is structurized after selection, and every i1 copy is
+	// masked from the start.
+	divergent bool
+
 	// The incoming registers, pinned: the kernarg pointer, the workgroup
 	// ids, the work-item id VGPRs.
 	kernarg mir.VReg
@@ -157,7 +162,7 @@ type fnState struct {
 // entry fills the entry block's head: the pinned inputs, the argument
 // loads, the copies into VGPRs.
 func (x *fnState) entry(mb *mir.Block) error {
-	c := newCursor(x.fn, x.mf, mb)
+	c := x.cursor(mb)
 	vr := x.vr
 
 	// User SGPRs: the kernarg pointer in s[0:1]. System SGPRs follow.

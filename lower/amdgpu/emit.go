@@ -115,6 +115,9 @@ func (e *emitter) forward(blocks []*mir.Block) {
 // made a no-op.
 func (e *emitter) allElided(ins []mir.Instr) bool {
 	for _, in := range ins {
+		if _, ok := in.Op.(undefOp); ok {
+			continue
+		}
 		if _, ok := in.Op.(movOp); !ok || e.reg(in.Defs[0]) != e.reg(in.Uses[0]) {
 			return false
 		}
@@ -174,7 +177,13 @@ func (e *emitter) instr(in mir.Instr, next string) error {
 		case s32:
 			e.text.Emit("s_mov_b32", dst, src)
 		case s64:
-			e.text.Emit("s_mov_b64", dst, src)
+			if op.masked {
+				e.text.Emit("s_and_b64", reg.VCC, src, reg.EXEC)
+				e.text.Emit("s_andn2_b64", dst, dst, reg.EXEC)
+				e.text.Emit("s_or_b64", dst, dst, reg.VCC)
+			} else {
+				e.text.Emit("s_mov_b64", dst, src)
+			}
 		}
 	case branchOp:
 		if t := e.target(op.target); t != next {
@@ -196,6 +205,38 @@ func (e *emitter) instr(in mir.Instr, next string) error {
 		e.text.Emit("s_and_b64", reg.VCC, e.reg(in.Uses[0]), reg.EXEC)
 		e.text.Emit("s_cbranch_scc1", operand.NewLabel(e.trapLabel))
 		e.trapUsed = true
+	case trapAnyOp:
+		e.text.Emit("s_cmp_lg_u64", reg.EXEC, operand.Imm(0))
+		e.text.Emit("s_cbranch_scc1", operand.NewLabel(e.trapLabel))
+		e.trapUsed = true
+
+	// The structurizer's ops; see structurize.go.
+	case execSaveOp:
+		e.text.Emit("s_mov_b64", e.reg(in.Defs[0]), reg.EXEC)
+	case execRestoreOp:
+		e.text.Emit("s_mov_b64", reg.EXEC, e.reg(in.Uses[0]))
+	case execAndOp:
+		e.text.Emit("s_and_b64", reg.EXEC, reg.EXEC, e.reg(in.Uses[0]))
+	case execzOp:
+		e.text.Emit("s_cbranch_execz", operand.NewLabel(e.target(op.target)))
+	case maskInitOp:
+		e.text.Emit("s_mov_b64", e.reg(in.Defs[0]), operand.Imm(0))
+	case pendClearOp:
+		p := e.reg(in.Defs[0])
+		e.text.Emit("s_andn2_b64", p, p, reg.EXEC)
+	case pendSetOp:
+		p, m := e.reg(in.Defs[0]), e.reg(in.Uses[1])
+		if op.neg {
+			e.text.Emit("s_andn2_b64", reg.VCC, reg.EXEC, m)
+		} else {
+			e.text.Emit("s_and_b64", reg.VCC, m, reg.EXEC)
+		}
+		e.text.Emit("s_andn2_b64", p, p, reg.EXEC)
+		e.text.Emit("s_or_b64", p, p, reg.VCC)
+	case pendSetAllOp:
+		p := e.reg(in.Defs[0])
+		e.text.Emit("s_or_b64", p, p, reg.EXEC)
+	case undefOp:
 	default:
 		return fmt.Errorf("%T is not an instruction this emitter knows", in.Op)
 	}
