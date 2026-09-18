@@ -81,7 +81,7 @@ func (x *fnState) selectInst(c *cursor, in *ir.Inst) error {
 		return x.binary(c, in, mn)
 	case ir.VSDiv, ir.VUDiv, ir.VSRem, ir.VURem:
 		if t != ir.TypeI32 {
-			return fmt.Errorf("the 64-bit divide expansion is not lowered yet")
+			return x.divRem64(c, in)
 		}
 		return x.divRem32(c, in)
 	case ir.VNeg:

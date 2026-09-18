@@ -708,3 +708,106 @@ func (x *fnState) overflow(c *cursor, in *ir.Inst) error {
 	}
 	return nil
 }
+
+// divRem64 is restoring division, one bit an iteration for sixty-four
+// iterations: slow, and the kind of correct that needs no oracle. LLVM's
+// expansion — a reciprocal from v_rcp_f32 and three Newton steps in
+// v_mad_u64_u32 — is a hundred instructions straight and the one to
+// write when a kernel is measured dividing.
+func (x *fnState) divRem64(c *cursor, in *ir.Inst) error {
+	verb := in.Op().Verb
+	signed := verb == ir.VSDiv || verb == ir.VSRem
+	wantRem := verb == ir.VSRem || verb == ir.VURem
+	d, err := x.result(in)
+	if err != nil {
+		return err
+	}
+	a, err := x.args(in)
+	if err != nil {
+		return err
+	}
+	num, den := a[0], a[1]
+	t := func() mir.VReg { return x.vr.temp(v64) }
+	t32 := func() mir.VReg { return x.vr.temp(v32) }
+	m := func() mir.VReg { return x.vr.temp(s64) }
+
+	zero := x.constV64(c, 0)
+	isZero := m()
+	x.emit(c, "v_cmp_eq_u64", rs(isZero), rs(den, zero), def(0), use(0), use(1))
+	x.trapIf(c, isZero)
+	if signed {
+		minInt, minusOne := x.constV64(c, 1<<63), x.constV64(c, 0xffffffffffffffff)
+		m1, m2, both := m(), m(), m()
+		x.emit(c, "v_cmp_eq_u64", rs(m1), rs(num, minInt), def(0), use(0), use(1))
+		x.emit(c, "v_cmp_eq_u64", rs(m2), rs(den, minusOne), def(0), use(0), use(1))
+		x.emit(c, "s_and_b64", rs(both), rs(m1, m2), def(0), use(0), use(1))
+		x.trapIf(c, both)
+	}
+
+	// Magnitudes, and the signs to put back.
+	var sn, sd mir.VReg
+	if signed {
+		sn, sd = t32(), t32()
+		x.emit(c, "v_ashrrev_i32", rs(sn), rs(num), def(0), imm(31), useHi(0))
+		x.emit(c, "v_ashrrev_i32", rs(sd), rs(den), def(0), imm(31), useHi(0))
+		num, den = x.negate64(c, num, sn), x.negate64(c, den, sd)
+	}
+
+	q, r, sh, k := t(), t(), t(), t32()
+	x.emit(c, "v_mov_b32", rs(q), nil, defLo(0), imm(0))
+	x.emit(c, "v_mov_b32", rs(q), rs(q), defHi(0), imm(0))
+	x.emit(c, "v_mov_b32", rs(r), nil, defLo(0), imm(0))
+	x.emit(c, "v_mov_b32", rs(r), rs(r), defHi(0), imm(0))
+	emitCopy(c, sh, num, v64)
+	x.emit(c, "v_mov_b32", rs(k), nil, def(0), imm(64))
+
+	l := x.openLoop(c)
+	more := m()
+	x.emit(c, "v_cmp_ne_u32", rs(more), rs(k), def(0), imm(0), use(0))
+	x.test(c, l, more)
+	// r = r << 1 | top bit of the shifted numerator; the numerator moves up.
+	top := t32()
+	x.emit(c, "v_lshrrev_b32", rs(top), rs(sh), def(0), imm(31), useHi(0))
+	x.emit(c, "v_lshlrev_b64", rs(r), rs(r), def(0), imm(1), use(0))
+	x.emit(c, "v_or_b32", rs(r), rs(r, top), defLo(0), useLo(0), use(1))
+	x.emit(c, "v_lshlrev_b64", rs(sh), rs(sh), def(0), imm(1), use(0))
+	// Subtract where it fits; the quotient takes the bit.
+	diff, ge, bit := t(), m(), t32()
+	x.emit(c, "v_sub_co_u32", rs(diff), rs(r, den), defLo(0), vcc(), useLo(0), useLo(1))
+	x.emit(c, "v_subb_co_u32", rs(diff), rs(r, den, diff), defHi(0), vcc(), useHi(0), useHi(1), vcc())
+	x.emit(c, "v_cmp_ge_u64", rs(ge), rs(r, den), def(0), use(0), use(1))
+	x.emit(c, "v_cndmask_b32", rs(r), rs(r, diff, ge), defLo(0), useLo(0), useLo(1), use(2))
+	x.emit(c, "v_cndmask_b32", rs(r), rs(r, diff, ge), defHi(0), useHi(0), useHi(1), use(2))
+	x.emit(c, "v_cndmask_b32", rs(bit), rs(ge), def(0), imm(0), imm(1), use(0))
+	x.emit(c, "v_lshlrev_b64", rs(q), rs(q), def(0), imm(1), use(0))
+	x.emit(c, "v_or_b32", rs(q), rs(q, bit), defLo(0), useLo(0), use(1))
+	x.emit(c, "v_add_u32", rs(k), rs(k), def(0), imm(-1), use(0))
+	x.closeLoop(c, l)
+
+	res := q
+	if wantRem {
+		res = r
+	}
+	if !signed {
+		emitCopy(c, d, res, v64)
+		return nil
+	}
+	sign := sn
+	if !wantRem {
+		sign = t32()
+		x.emit(c, "v_xor_b32", rs(sign), rs(sn, sd), def(0), use(0), use(1))
+	}
+	out := x.negate64(c, res, sign)
+	emitCopy(c, d, out, v64)
+	return nil
+}
+
+// negate64 is (v ^ s) - s: v negated where the sign word s is all ones.
+func (x *fnState) negate64(c *cursor, v, s mir.VReg) mir.VReg {
+	out := x.vr.temp(v64)
+	x.emit(c, "v_xor_b32", rs(out), rs(v, s), defLo(0), useLo(0), use(1))
+	x.emit(c, "v_xor_b32", rs(out), rs(v, s, out), defHi(0), useHi(0), use(1))
+	x.emit(c, "v_sub_co_u32", rs(out), rs(out, s), defLo(0), vcc(), useLo(0), use(1))
+	x.emit(c, "v_subb_co_u32", rs(out), rs(out, s), defHi(0), vcc(), useHi(0), use(1), vcc())
+	return out
+}

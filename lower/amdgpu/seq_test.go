@@ -55,6 +55,12 @@ func TestSequences(t *testing.T) {
 		{"srem32", unaryKernel("srem32", i32, func(b *ir.Builder, v ir.Value) ir.Value {
 			return b.I32.SRem(b.I32.Const(-100), v.(ir.I32))
 		}, sI32), []string{"v_rcp_iflag_f32", "v_ashrrev_i32", "s_trap 2"}},
+		{"udiv64", unaryKernel("udiv64", i64, func(b *ir.Builder, v ir.Value) ir.Value {
+			return b.I64.UDiv(v.(ir.I64), b.I64.Const(1000000007))
+		}, sI64), []string{"v_cmp_eq_u64", "s_trap 2", "v_lshlrev_b64", "v_cmp_ge_u64", "v_cndmask_b32", "s_cbranch_scc1"}},
+		{"srem64", unaryKernel("srem64", i64, func(b *ir.Builder, v ir.Value) ir.Value {
+			return b.I64.SRem(b.I64.Const(-5), v.(ir.I64))
+		}, sI64), []string{"v_cmp_eq_u64", "v_xor_b32", "v_subb_co_u32", "v_cmp_ge_u64"}},
 		{"fdiv32", unaryKernel("fdiv32", f32, func(b *ir.Builder, v ir.Value) ir.Value {
 			return b.F32.Div(v.(ir.F32), b.F32.Const(3))
 		}, sF32), []string{"v_div_scale_f32", "v_div_fmas_f32", "v_div_fixup_f32", "v_fma_f32 v", "-v"}},

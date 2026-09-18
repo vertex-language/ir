@@ -303,7 +303,7 @@ else.
 
 | | amd64 | arm64 | i386 | ptx | amdgpu |
 |---|---|---|---|---|---|
-| §A · §A2 arithmetic, wide multiply, overflow predicates | ✅ | ✅ | ✅ | ✅ | ✅ at `i32`; `i64` all but divide ¹⁰ |
+| §A · §A2 arithmetic, wide multiply, overflow predicates | ✅ | ✅ | ✅ | ✅ | ✅ ¹⁰ |
 | §A3 float arithmetic, at `f32`/`f64` | ✅ | ✅ | ✅ | ✅, and the approximate six | ✅, and the approximate six |
 | §A4–§A7 bitwise, shifts, bit counting, constants | ✅ | ✅ | ✅ | ✅ | ✅ |
 | §B comparisons | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -346,9 +346,11 @@ else.
 9. From sm_70. Below it PTX has no scope qualifiers: `device` and
    `system` lower to the unscoped forms with `membar` where an acquire
    or release needs one, and `workgroup` is refused rather than widened.
-10. There is no 64-bit divide instruction and the expansion is a long
-    straight sequence LLVM's `LowerUDIVREM64` writes; it is not written
-    here yet, and the row is refused by name.
+10. There is no 64-bit divide instruction. The row is restoring
+    division, one bit an iteration for sixty-four iterations — correct
+    and slow; LLVM's `LowerUDIVREM64` is a hundred instructions of
+    reciprocal and Newton steps, and is the one to write when a kernel
+    is measured dividing. `i32` division is LLVM's `expandDivRem32`.
 11. `lower/amdgpu` lowers a kernel whose control flow is reducible: a
     function with no divergent branch keeps scalar branches, and one
     with any is structurized — every block behind a flow that narrows
