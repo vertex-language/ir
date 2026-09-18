@@ -25,6 +25,11 @@
 //     — every block behind a flow that narrows exec to the lanes whose
 //     predicate is set — and its branches become predicate assignments;
 //     see structurize.go. An irreducible CFG is refused by name.
+//   - 32 and 33, workgroup storage and atomics. A shared global is an
+//     LDS offset and its address the aperture over it; an access that
+//     provably goes there is a ds_* instruction. §H is the returning
+//     flat or DS atomic with each generation's cache control around it;
+//     see atomic.go.
 //
 // # What is different about this target
 //

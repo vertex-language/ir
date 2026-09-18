@@ -312,12 +312,12 @@ else.
 | §D3 pointer ops | all but `tlsaddr` | all but `tlsaddr` | all but `tlsaddr` | `alloc`, `alloca`, `getaddr`, `diff`, stack save/restore ⁶ | `getaddr`, `diff` ¹¹ |
 | §E bulk memory | ✅ non-`volatile` | ✅ non-`volatile` | ✅ non-`volatile` | ✅ as byte loops | — ¹¹ |
 | §F select | ✅ | ✅ | ✅ | ✅ | ✅ |
-| §G · §G2 calls, terminators, computed branches | ✅ | ✅ | ✅ | all but `brind` ⁷ | `br`, uniform `brif`, `return`, `trap`; calls inlined ¹¹ |
+| §G · §G2 calls, terminators, computed branches | ✅ | ✅ | ✅ | all but `brind` ⁷ | `br`, `brif`, `return`, `trap`; calls inlined; not `br_table`, `brind` ¹¹ |
 | §G3 unwinding — `invoke`, `invokeind`, `resume` | — | Mach-O | — | — ⁸ | — ⁸ |
 | §G4 inline assembly | — | — | — | `asm`; not `asm goto` | — |
-| §H atomics | ✅ | ✅ | ✅ | ✅ with scopes ⁹; not the narrow forms | — ¹¹ |
+| §H atomics | ✅ | ✅ | ✅ | ✅ with scopes ⁹; not the narrow forms | ✅ with scopes ¹²; not the narrow forms |
 | §I variadics | ✅ ¹ | Apple's variant only ² | ✅ | — ⁸ | — ⁸ |
-| §W work-items, `barrier`, `shared`, the wave verbs | — | — | — | ✅ | the ids, `barrier`, `shared` storage ¹¹ |
+| §W work-items, `barrier`, `shared`, the wave verbs | — | — | — | ✅ | the ids, `barrier`, `shared`; not the wave verbs ¹¹ |
 | ext-float | `f128` ✅, `f80` — ³ | `f128` — ⁴ | `f80` — ³ | neither ⁸ | neither ⁸ |
 
 1. Except `ptr.va_arg_ref` of an aggregate small enough to have been
@@ -349,14 +349,20 @@ else.
 10. There is no 64-bit divide instruction and the expansion is a long
     straight sequence LLVM's `LowerUDIVREM64` writes; it is not written
     here yet, and the row is refused by name.
-11. `lower/amdgpu` lowers *uniform* kernels today: a branch whose
-    condition every lane agrees on is a scalar branch, and one whose
-    condition differs across the wave is refused by name until the
-    execution-mask lowering lands. Private memory (`alloc`, spilling),
-    atomics, bulk memory, the wave verbs and the device calling
-    convention are behind it in the same queue; the trap rows are not,
-    since a per-lane trap condition is a mask tested against `exec` and
-    one scalar branch.
+11. `lower/amdgpu` lowers a kernel whose control flow is reducible: a
+    function with no divergent branch keeps scalar branches, and one
+    with any is structurized — every block behind a flow that narrows
+    `exec` to the lanes whose predicate is set. Private memory (`alloc`,
+    spilling), bulk memory, the wave verbs and the device calling
+    convention are still in the queue. A per-lane trap condition is a
+    mask tested against `exec` and one scalar branch.
+12. Each generation's memory model as LLVM emits it: `glc` and
+    `buffer_wbinvl1_vol` on GFX9, `buffer_wbl2`/`buffer_invl2` at system
+    scope on gfx90a, and gfx940's `sc0`/`sc1` bits with `buffer_wbl2`
+    and `buffer_inv`. An access whose pointer provably came from a
+    `shared` global is a `ds_*` instruction; the rest is flat. An `f32`
+    atomic add through a flat pointer needs gfx940; below it LLVM spins
+    a compare-and-swap, which is not written here yet.
 4. `f128` on amd64 is compiler-rt — §0 is explicit that a namespace the
    layout admits is usable whether or not silicon implements it, and
    that lowering supplies the call. Its §A3 rows are the arithmetic and

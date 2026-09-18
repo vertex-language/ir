@@ -132,8 +132,9 @@ func (x *fnState) kernelOptions(vgprs, sgprs int) []amdgpuasm.KernelOption {
 		amdgpuasm.WithWorkgroupIDs(k.wgIDs[1], k.wgIDs[2]),
 		amdgpuasm.WithWorkitemIDs(k.wiIDs),
 	}
-	if k.lds > 0 {
-		opts = append(opts, amdgpuasm.WithLDS(int(k.lds)))
+	// Every kernel of the module shares the module's LDS layout.
+	if x.l.ldsSize > 0 {
+		opts = append(opts, amdgpuasm.WithLDS(int(x.l.ldsSize)))
 	}
 	return opts
 }

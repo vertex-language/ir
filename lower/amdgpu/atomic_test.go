@@ -1,0 +1,128 @@
+package amdgpu_test
+
+import (
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/vertex-language/amdgpu/feature"
+
+	"github.com/vertex-language/ir"
+	lower "github.com/vertex-language/ir/lower/amdgpu"
+)
+
+// Workgroup storage: each lane stores to the shared array, the workgroup
+// barriers, and each lane reads its neighbour's slot. The shared global
+// is an LDS offset, its address the aperture over that offset, and the
+// accesses through it ds_write and ds_read.
+func TestShared(t *testing.T) {
+	m := ir.NewModule("lds", ir.AMDGCN)
+	buf := m.Global("buf", ir.Shared, ir.Array(256, ir.StoreI32.FType())).Align(4)
+	fn := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+	a := fn.ParamPtr("a", ir.NoAlias)
+	e := fn.Entry()
+	tid := e.I32.WorkitemID(ir.X)
+	off := e.I64.Shl(e.I64.ZExtI32(tid), e.I64.Const(2))
+	p := e.Ptr.Add(a, off)
+	s := e.Ptr.Add(e.Ptr.GetAddr(buf), off)
+	e.I32.Store(e.I32.Load(p), s)
+	e.Barrier()
+	next := e.I32.And(e.I32.Add(tid, e.I32.Const(1)), e.I32.Const(255))
+	sn := e.Ptr.Add(e.Ptr.GetAddr(buf), e.I64.Shl(e.I64.ZExtI32(next), e.I64.Const(2)))
+	e.I32.Store(e.I32.Load(sn), p)
+	e.Return()
+
+	o := lowerObj(t, m, lower.Options{ASIC: feature.GFX942})
+	if kd := o.KernelDescriptors()[0]; kd.GroupSegmentFixedSize != 1024 {
+		t.Errorf("group segment = %d, want 1024", kd.GroupSegmentFixedSize)
+	}
+	got := disassemble(t, o, feature.GFX942)
+	if got == nil {
+		return
+	}
+	text := strings.Join(got, "\n")
+	if os.Getenv("AMDGPU_LISTING") != "" {
+		t.Log("\n" + text)
+	}
+	for _, w := range []string{"src_shared_base", "ds_write_b32", "s_barrier", "ds_read_b32", "flat_store_dword"} {
+		if !strings.Contains(text, w) {
+			t.Errorf("no %q in:\n%s", w, text)
+		}
+	}
+}
+
+// The memory model on each generation: an acq_rel device-scope add, a
+// system-scope compare-and-swap, an acquire load and a release fence.
+func TestAtomics(t *testing.T) {
+	build := func() *ir.Module {
+		m := ir.NewModule("at", ir.AMDGCN)
+		fn := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+		p := fn.ParamPtr("p")
+		q := fn.ParamPtr("q")
+		e := fn.Entry()
+		old := e.I32.AtomicRmwAdd(e.I32.Const(1), p, ir.AcqRel, ir.DeviceScope)
+		was := e.I64.AtomicCas(e.I64.Const(0), e.I64.ZExtI32(old), q, ir.SeqCst, ir.Monotonic)
+		v := e.I32.AtomicLoad(p, ir.Acquire, ir.DeviceScope)
+		e.Fence(ir.Release, ir.FenceDevice)
+		e.I32.AtomicStore(e.I32.Add(v, e.I32.WrapI64(was)), p, ir.Monotonic, ir.WorkgroupScope)
+		e.Return()
+		return m
+	}
+	for _, c := range []struct {
+		asic  feature.ASIC
+		wants []string
+	}{
+		{feature.GFX942, []string{"buffer_wbl2 sc1", "flat_atomic_add v", "sc0", "buffer_inv sc1",
+			"buffer_wbl2 sc0 sc1", "flat_atomic_cmpswap_x2 v", "v[60:63]", "buffer_inv sc0 sc1",
+			"flat_load_dword v", "sc1", "flat_store_dword v"}},
+		{feature.GFX90A, []string{"flat_atomic_add v", "glc", "buffer_wbinvl1_vol",
+			"buffer_wbl2", "flat_atomic_cmpswap_x2 v", "buffer_invl2"}},
+		{feature.GFX900, []string{"flat_atomic_add v", "glc", "buffer_wbinvl1_vol", "flat_atomic_cmpswap_x2 v"}},
+	} {
+		t.Run(c.asic.String(), func(t *testing.T) {
+			o := lowerObj(t, build(), lower.Options{ASIC: c.asic})
+			got := disassemble(t, o, c.asic)
+			if got == nil {
+				return
+			}
+			text := strings.Join(got, "\n")
+			if os.Getenv("AMDGPU_LISTING") != "" {
+				t.Log("\n" + text)
+			}
+			for _, w := range c.wants {
+				if !strings.Contains(text, w) {
+					t.Errorf("no %q in:\n%s", w, text)
+				}
+			}
+		})
+	}
+}
+
+// Atomics on workgroup storage are DS instructions.
+func TestSharedAtomics(t *testing.T) {
+	m := ir.NewModule("lat", ir.AMDGCN)
+	cnt := m.Global("cnt", ir.Shared, ir.StoreI32.FType()).Align(4)
+	fn := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+	p := fn.ParamPtr("p")
+	e := fn.Entry()
+	s := e.Ptr.GetAddr(cnt)
+	old := e.I32.AtomicRmwAdd(e.I32.Const(1), s, ir.Monotonic, ir.WorkgroupScope)
+	was := e.I32.AtomicCas(old, e.I32.Const(7), s, ir.AcqRel, ir.Monotonic, ir.WorkgroupScope)
+	e.F32.AtomicRmwAdd(e.F32.Const(1), s, ir.Monotonic, ir.WorkgroupScope)
+	e.I32.Store(was, p)
+	e.Return()
+	o := lowerObj(t, m, lower.Options{ASIC: feature.GFX942})
+	got := disassemble(t, o, feature.GFX942)
+	if got == nil {
+		return
+	}
+	text := strings.Join(got, "\n")
+	if os.Getenv("AMDGPU_LISTING") != "" {
+		t.Log("\n" + text)
+	}
+	for _, w := range []string{"ds_add_rtn_u32", "ds_cmpst_rtn_b32", "ds_add_rtn_f32"} {
+		if !strings.Contains(text, w) {
+			t.Errorf("no %q in:\n%s", w, text)
+		}
+	}
+}

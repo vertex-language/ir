@@ -20,6 +20,20 @@ import (
 // emit writes one selected, allocated function into the module.
 func (l *lowerer) emit(x *fnState, assigned map[mir.VReg]regalloc.PhysReg) error {
 	vgprs, sgprs := registerCounts(assigned)
+	// The descriptor's register counts are written before the body,
+	// but the fixed VGPRs a body names are known only once it is
+	// emitted: count them ahead by looking.
+	for _, b := range x.mf.Blocks {
+		for _, in := range b.Instrs {
+			if op, ok := in.Op.(amdOp); ok {
+				for _, o := range op.ops {
+					if o.kind == oFixedV {
+						vgprs = max(vgprs, int(o.imm)+max(o.i, 1))
+					}
+				}
+			}
+		}
+	}
 	k := l.am.Kernel(x.fn.Name(), x.kernelOptions(vgprs, sgprs)...)
 	text := k.Section()
 	e := &emitter{text: text, assigned: assigned, trapLabel: x.fn.Name() + ".trap"}
@@ -86,6 +100,10 @@ type emitter struct {
 	// branches to it.
 	trapLabel string
 	trapUsed  bool
+
+	// fixedTop is one past the highest fixed VGPR an instruction named,
+	// which the register count has to reach.
+	fixedTop int
 }
 
 // forward finds the empty blocks and resolves chains of them.
@@ -269,7 +287,7 @@ func (e *emitter) operand(o opnd, in mir.Instr) operand.Operand {
 	case oM0:
 		return reg.M0
 	case oFlat:
-		return operand.Flat(e.reg(in.Uses[o.i])).Off(int32(o.imm))
+		return operand.Flat(e.reg(in.Uses[o.i])).Off(int32(o.imm)).SetGLC(o.glc).SetSC1(o.sc1)
 	case oGlobal:
 		return operand.Global(e.reg(in.Uses[o.i])).Off(int32(o.imm))
 	case oGlobalS:
@@ -277,7 +295,24 @@ func (e *emitter) operand(o opnd, in mir.Instr) operand.Operand {
 	case oSMEM:
 		return operand.SMEM(e.reg(in.Uses[o.i])).Off(int32(o.imm))
 	case oDS:
-		return operand.DS(e.reg(in.Uses[o.i])).Off(int32(o.imm))
+		// The LDS offset is the flat address's low dword.
+		return operand.DS(e.half(in.Uses[o.i], false)).Off(int32(o.imm))
+	case oSharedBase:
+		return reg.SRC_SHARED_BASE
+	case oCache:
+		return operand.Cache(o.glc, o.sc1)
+	case oFixedV:
+		n := int(o.imm)
+		if e.fixedTop < n+max(o.i, 1) {
+			e.fixedTop = n + max(o.i, 1)
+		}
+		switch o.i {
+		case 2:
+			return reg.V2(reg.VGPR(n))
+		case 4:
+			return reg.V4(reg.VGPR(n))
+		}
+		return reg.VGPR(n)
 	case oLabel:
 		return operand.NewLabel(o.sym)
 	case oWait:

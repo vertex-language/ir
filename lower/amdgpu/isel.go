@@ -327,11 +327,15 @@ func (x *fnState) selectInst(c *cursor, in *ir.Inst) error {
 		return fmt.Errorf("the wave verbs are not lowered yet")
 
 	// —— §H ——
-	case ir.VAtomicLoad, ir.VAtomicStore, ir.VAtomicCas,
+	case ir.VAtomicLoad, ir.VAtomicULoad8, ir.VAtomicULoad16,
+		ir.VAtomicStore, ir.VAtomicStore8, ir.VAtomicStore16,
+		ir.VAtomicCas, ir.VAtomicCas8, ir.VAtomicCas16,
 		ir.VAtomicRmwAdd, ir.VAtomicRmwSub, ir.VAtomicRmwAnd, ir.VAtomicRmwOr,
 		ir.VAtomicRmwXor, ir.VAtomicRmwXchg,
-		ir.VAtomicRmwSMin, ir.VAtomicRmwSMax, ir.VAtomicRmwUMin, ir.VAtomicRmwUMax:
-		return fmt.Errorf("atomics are not lowered yet")
+		ir.VAtomicRmwSMin, ir.VAtomicRmwSMax, ir.VAtomicRmwUMin, ir.VAtomicRmwUMax,
+		ir.VAtomicRmwAdd8, ir.VAtomicRmwSub8, ir.VAtomicRmwAnd8, ir.VAtomicRmwOr8, ir.VAtomicRmwXor8, ir.VAtomicRmwXchg8,
+		ir.VAtomicRmwAdd16, ir.VAtomicRmwSub16, ir.VAtomicRmwAnd16, ir.VAtomicRmwOr16, ir.VAtomicRmwXor16, ir.VAtomicRmwXchg16:
+		return x.atomic(c, in)
 	}
 	return fmt.Errorf("not lowered")
 }
@@ -343,14 +347,7 @@ func (x *fnState) selectBare(c *cursor, in *ir.Inst) error {
 		x.emit(c, "s_barrier", nil, nil)
 		return nil
 	case ir.VFence:
-		if in.SingleThread() {
-			return nil
-		}
-		if in.Scope() != ir.Workgroup {
-			return fmt.Errorf("a fence beyond the workgroup writes back the cache, which is not lowered yet")
-		}
-		c.Emit(mir.Instr{Op: amdOp{mn: "s_waitcnt", ops: []opnd{{kind: oWait}}}})
-		return nil
+		return x.fence(c, in)
 	case ir.VCall, ir.VCallInd:
 		return fmt.Errorf("calls are not lowered yet")
 	case ir.VMemCpy, ir.VMemMove, ir.VMemSet, ir.VMemCmp:
@@ -787,27 +784,32 @@ func (x *fnState) load(c *cursor, in *ir.Inst) error {
 		return err
 	}
 	var mn string
+	shared := sharedPtr(in.Arg(0))
 	switch in.Op().Verb {
 	case ir.VSLoad8:
-		mn = "flat_load_sbyte"
+		mn = pick(shared, "ds_read_i8", "flat_load_sbyte")
 	case ir.VULoad8:
-		mn = "flat_load_ubyte"
+		mn = pick(shared, "ds_read_u8", "flat_load_ubyte")
 	case ir.VSLoad16:
-		mn = "flat_load_sshort"
+		mn = pick(shared, "ds_read_i16", "flat_load_sshort")
 	case ir.VULoad16:
-		mn = "flat_load_ushort"
+		mn = pick(shared, "ds_read_u16", "flat_load_ushort")
 	case ir.VSLoad32, ir.VULoad32:
-		mn = "flat_load_dword"
+		mn = pick(shared, "ds_read_b32", "flat_load_dword")
 	default:
-		mn = "flat_load_dword"
+		mn = pick(shared, "ds_read_b32", "flat_load_dword")
 		if t == ir.TypeI64 || t == ir.TypePtr || t == ir.TypeF64 {
-			mn = "flat_load_dwordx2"
+			mn = pick(shared, "ds_read_b64", "flat_load_dwordx2")
 		}
+	}
+	addr := flat(0)
+	if shared {
+		addr = ds(0)
 	}
 	if t == ir.TypeI64 && in.Op().Verb != ir.VLoad {
 		// A sub-width load into an i64 fills the low half; the high
 		// half is the sign, or zero.
-		x.emitMem(c, mn, []mir.VReg{d}, a, defLo(0), flat(0))
+		x.emitMem(c, mn, []mir.VReg{d}, a, defLo(0), addr)
 		if in.Op().Verb == ir.VSLoad8 || in.Op().Verb == ir.VSLoad16 || in.Op().Verb == ir.VSLoad32 {
 			x.emit(c, "v_ashrrev_i32", []mir.VReg{d}, []mir.VReg{d}, defHi(0), imm(31), useLo(0))
 		} else {
@@ -815,8 +817,16 @@ func (x *fnState) load(c *cursor, in *ir.Inst) error {
 		}
 		return nil
 	}
-	x.emitMem(c, mn, []mir.VReg{d}, a, def(0), flat(0))
+	x.emitMem(c, mn, []mir.VReg{d}, a, def(0), addr)
 	return nil
+}
+
+// pick is the LDS or the flat spelling.
+func pick(shared bool, ds, flat string) string {
+	if shared {
+		return ds
+	}
+	return flat
 }
 
 func (x *fnState) store(c *cursor, in *ir.Inst) error {
@@ -833,23 +843,28 @@ func (x *fnState) store(c *cursor, in *ir.Inst) error {
 	}
 	var mn string
 	val := use(0)
+	shared := sharedPtr(in.Arg(1))
 	switch in.Op().Verb {
 	case ir.VStore8:
-		mn = "flat_store_byte"
+		mn = pick(shared, "ds_write_b8", "flat_store_byte")
 	case ir.VStore16:
-		mn = "flat_store_short"
+		mn = pick(shared, "ds_write_b16", "flat_store_short")
 	case ir.VStore32:
-		mn = "flat_store_dword"
+		mn = pick(shared, "ds_write_b32", "flat_store_dword")
 	default:
-		mn = "flat_store_dword"
+		mn = pick(shared, "ds_write_b32", "flat_store_dword")
 		if t == ir.TypeI64 || t == ir.TypePtr || t == ir.TypeF64 {
-			mn = "flat_store_dwordx2"
+			mn = pick(shared, "ds_write_b64", "flat_store_dwordx2")
 		}
 	}
 	if t == ir.TypeI64 && in.Op().Verb != ir.VStore {
 		val = useLo(0)
 	}
-	x.emitMem(c, mn, nil, a, flat(1), val)
+	addr := flat(1)
+	if shared {
+		addr = ds(1)
+	}
+	x.emitMem(c, mn, nil, a, addr, val)
 	return nil
 }
 
@@ -877,12 +892,12 @@ func (x *fnState) getaddr(c *cursor, in *ir.Inst) error {
 	if f, ok := sym.(*ir.Func); ok {
 		return fmt.Errorf("the address of @%s: functions are not lowered yet", f.Name())
 	}
-	if g, ok := sym.(*ir.Global); ok && g.Domain() == ir.Shared {
-		return fmt.Errorf("the address of workgroup storage is not lowered yet")
-	}
 	d, err := x.result(in)
 	if err != nil {
 		return err
+	}
+	if g, ok := sym.(*ir.Global); ok && g.Domain() == ir.Shared {
+		return x.getaddrShared(c, d, g)
 	}
 	pc, addr := x.vr.temp(s64), x.vr.temp(s64)
 	x.emit(c, "s_getpc_b64", []mir.VReg{pc}, nil, def(0))
