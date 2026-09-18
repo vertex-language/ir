@@ -380,9 +380,11 @@ else.
     stack and frame pointers on the private segment, and a callee that
     saves every register it touches. A kernel's private segment is its
     own frame plus the deepest chain of frames beneath it, so recursion
-    is refused, as is a function pointer that differs across the wave
-    and an argument list past thirty-two dwords. A call to an import
-    needs a dynamic relocation the code object writer does not emit.
+    is refused, as is an argument list past thirty-two dwords. A
+    function pointer that differs across the wave is a waterfall loop:
+    each pass calls the first active lane's target for the lanes that
+    share it. A call to an import needs a dynamic relocation the code
+    object writer does not emit.
 15. The template goes through the `amdgpu` repo's assembler with each
     `%N` the operand's register. Constraint `v` (or `reg`) is the value's
     own register — a VGPR, or an SGPR pair for an `i1` — and `s` reads

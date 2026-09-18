@@ -262,11 +262,14 @@ func (e *emitter) instr(in mir.Instr, next string) error {
 	case spInitOp:
 		e.text.Emit("s_mov_b32", reg.SGPR(spSGPR), immediate(int64(e.x.frame.size())))
 	case callOp:
-		t := reg.S2(reg.SGPR(callTempSGPR))
+		var t reg.Reg = reg.S2(reg.SGPR(callTempSGPR))
 		if op.sym != "" {
 			e.text.Emit("s_getpc_b64", t)
 			e.text.Emit("s_add_u32", reg.SGPR(callTempSGPR), reg.SGPR(callTempSGPR), operand.Ref(op.sym, obj.RefRel32Lo).WithAddend(4))
 			e.text.Emit("s_addc_u32", reg.SGPR(callTempSGPR+1), reg.SGPR(callTempSGPR+1), operand.Ref(op.sym, obj.RefRel32Hi).WithAddend(12))
+		} else if op.scalar {
+			// A waterfall's pick, already a pair.
+			t = e.reg(in.Uses[len(in.Uses)-1])
 		} else {
 			// The pointer, from the first active lane.
 			p := in.Uses[len(in.Uses)-1]

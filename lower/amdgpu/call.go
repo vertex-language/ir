@@ -110,8 +110,9 @@ type (
 	// last two Uses when sym is empty. Its other Uses are the pinned
 	// argument vregs, its Defs the pinned result vregs.
 	callOp struct {
-		sym   string
-		nargs int
+		sym    string
+		nargs  int
+		scalar bool // the target is the SGPR pair in the last Use, not a VGPR pair
 	}
 	// callResultsOp defines the pinned result vregs after a call and
 	// emits nothing: a def on the call itself would interfere with the
@@ -197,9 +198,6 @@ func (x *fnState) call(c *cursor, in *ir.Inst) error {
 		if t == nil || t.Sig() == nil {
 			return fmt.Errorf("callind names no func type")
 		}
-		if !x.uni.isUniform(in.Arg(0)) {
-			return fmt.Errorf("the function pointer differs across the wave; a waterfall loop over its values is not written yet")
-		}
 		p, err := x.vr.use(in.Arg(0))
 		if err != nil {
 			return err
@@ -238,9 +236,6 @@ func (x *fnState) call(c *cursor, in *ir.Inst) error {
 		}
 		uses = append(uses, p)
 	}
-	if sym == "" {
-		uses = append(uses, addr)
-	}
 	// The results into pinned vregs the call defines.
 	var defs []mir.VReg
 	for _, s := range rslots {
@@ -248,7 +243,14 @@ func (x *fnState) call(c *cursor, in *ir.Inst) error {
 		x.vr.pin(p, physOf(s.w, s.phys))
 		defs = append(defs, p)
 	}
-	c.Emit(mir.Instr{Op: callOp{sym: sym, nargs: len(args)}, Uses: uses})
+	switch {
+	case sym != "":
+		c.Emit(mir.Instr{Op: callOp{sym: sym, nargs: len(args)}, Uses: uses})
+	case x.uni.isUniform(in.Arg(0)):
+		c.Emit(mir.Instr{Op: callOp{nargs: len(args)}, Uses: append(uses, addr)})
+	default:
+		x.waterfall(c, addr, uses)
+	}
 	c.Emit(mir.Instr{Op: callResultsOp{}, Defs: defs})
 	for i, r := range in.Results() {
 		d, err := x.vr.define(r)
@@ -262,6 +264,34 @@ func (x *fnState) call(c *cursor, in *ir.Inst) error {
 		}
 	}
 	return nil
+}
+
+// waterfall calls through a pointer that differs across the wave: each
+// time round, the first active lane's pointer is the target, the lanes
+// that hold it make the call under an execution mask narrowed to them,
+// and drop out; the loop ends when every lane has called. The arguments
+// sit in their registers throughout and each lane's results land in
+// theirs, since a callee writes only the lanes it runs for. The
+// function is structurized for this, so the branch below is a
+// predicate and the mask nests inside the flow's own.
+func (x *fnState) waterfall(c *cursor, addr mir.VReg, uses []mir.VReg) {
+	head, done := c.open("waterfall"), c.open("called")
+	c.Emit(mir.Instr{Op: branchOp{target: head.Label}})
+	c.mf.Succ(c.blk, head.Label)
+	c.blk = head
+	pick, same, save, rest := x.vr.temp(s64), x.vr.temp(s64), x.vr.temp(s64), x.vr.temp(s64)
+	x.emit(c, "v_readfirstlane_b32", rs(pick), rs(addr), defLo(0), useLo(0))
+	x.emit(c, "v_readfirstlane_b32", rs(pick), rs(addr, pick), defHi(0), useHi(0))
+	x.emit(c, "v_cmp_eq_u64", rs(same), rs(addr, pick), def(0), use(0), use(1))
+	c.Emit(mir.Instr{Op: execSaveOp{}, Defs: rs(save)})
+	c.Emit(mir.Instr{Op: execAndOp{}, Uses: rs(same)})
+	c.Emit(mir.Instr{Op: callOp{nargs: len(uses), scalar: true}, Uses: append(append([]mir.VReg(nil), uses...), pick)})
+	c.Emit(mir.Instr{Op: execRestoreOp{}, Uses: rs(save)})
+	x.emit(c, "s_not_b64", rs(rest), rs(same), def(0), use(0))
+	c.Emit(mir.Instr{Op: cbranchOp{then: head.Label, els: done.Label}, Uses: rs(rest)})
+	c.mf.Succ(c.blk, head.Label)
+	c.mf.Succ(c.blk, done.Label)
+	c.blk = done
 }
 
 // —— the call graph ——

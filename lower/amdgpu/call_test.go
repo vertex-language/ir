@@ -89,3 +89,36 @@ func TestRecursionRefused(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A function pointer that differs across the wave: the call is a
+// waterfall loop, each pass calling the first active lane's target for
+// the lanes that share it.
+func TestWaterfall(t *testing.T) {
+	m := ir.NewModule("wf", ir.AMDGCN)
+	fT := m.FuncType("f_t", ir.NewSig().Param(ir.TypeI32).Ret(ir.TypeI32))
+	dbl := m.Func("dbl").Internal().ReturnsI32().NoUnwind()
+	dx := dbl.ParamI32("x")
+	dbl.Entry().Return(dbl.Entry().I32.Mul(dx, dbl.Entry().I32.Const(2)))
+	inc := m.Func("inc").Internal().ReturnsI32().NoUnwind()
+	ix := inc.ParamI32("x")
+	inc.Entry().Return(inc.Entry().I32.Add(ix, inc.Entry().I32.Const(1)))
+
+	k := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+	p := k.ParamPtr("p")
+	e := k.Entry()
+	tid := e.I32.WorkitemID(ir.X)
+	odd := e.I32.Ne(e.I32.And(tid, e.I32.Const(1)), e.I32.Const(0))
+	fp := e.Ptr.Select(odd, e.Ptr.GetAddr(dbl), e.Ptr.GetAddr(inc))
+	r := e.CallInd(fp, fT, tid).I32(0)
+	e.I32.Store(r, e.Ptr.Add(p, e.I64.Shl(e.I64.ZExtI32(tid), e.I64.Const(2))))
+	e.Return()
+	got := lowers(t, m, feature.GFX942,
+		"v_readfirstlane_b32 s", "v_cmp_eq_u64_e64 s", "s_and_b64 exec, exec, s", "s_swappc_b64 s[30:31], s[", "s_not_b64 s")
+	if got == nil {
+		return
+	}
+	text := strings.Join(got, "\n")
+	if strings.Count(text, "s_swappc_b64") != 1 {
+		t.Errorf("the waterfall should hold one call:\n%s", text)
+	}
+}

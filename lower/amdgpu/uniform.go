@@ -128,7 +128,7 @@ func (u *uniformity) needsStructure(f *ir.Func) bool {
 	divergent := false
 	f.WalkInsts(func(in *ir.Inst) bool {
 		switch in.Op().Verb {
-		case ir.VBrIf, ir.VBrTable:
+		case ir.VBrIf, ir.VBrTable, ir.VCallInd:
 			if !u.isUniform(in.Arg(0)) {
 				divergent = true
 			}
