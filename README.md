@@ -345,7 +345,8 @@ else.
    the namespace before lowering sees it.
 9. From sm_70. Below it PTX has no scope qualifiers: `device` and
    `system` lower to the unscoped forms with `membar` where an acquire
-   or release needs one, and `workgroup` is refused rather than widened.
+   or release needs one, and `workgroup` is widened to the GPU's scope,
+   which contains it.
 10. There is no 64-bit divide instruction. The row is restoring
     division, one bit an iteration for sixty-four iterations — correct
     and slow; LLVM's `LowerUDIVREM64` is a hundred instructions of
