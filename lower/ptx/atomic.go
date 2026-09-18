@@ -79,7 +79,10 @@ func (x *fn) atomic(in *ir.Inst) error {
 	o := ords[0]
 	s := in.Scope()
 	if s == ir.Workgroup && !x.scoped() {
-		return fmt.Errorf("workgroup scope needs sm_70; widening it is correct and not yet a decision")
+		// Before sm_70 an atom has one scope, the GPU's, which contains
+		// the workgroup: the wider scope keeps every promise the
+		// narrower one made, and costs what nvcc's own code costs there.
+		s = ir.Device
 	}
 	if t.IsFloat() {
 		if err := x.l.needSM(op, 20, "atom.add.f32"); err != nil {
