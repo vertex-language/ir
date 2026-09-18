@@ -286,3 +286,30 @@ func TestFloatAddLoop(t *testing.T) {
 	lowers(t, m, feature.GFX900, "v_add_f32_e32", "flat_atomic_cmpswap v", "v_cmp_ne_u32_e64", "s_cbranch_execz")
 	lowers(t, m, feature.GFX942, "flat_atomic_add_f32")
 }
+
+// A frame past what a scratch offset reaches: the offset travels in a
+// VGPR.
+func TestLargeFrame(t *testing.T) {
+	m := ir.NewModule("lf", ir.AMDGCN)
+	fn := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+	p := fn.ParamPtr("p")
+	e := fn.Entry()
+	big := e.Ptr.Alloc(8192, 16)
+	e.I32.Store(e.I32.Const(1), e.Ptr.Add(big, e.I64.Const(8000)))
+	// Enough live values to spill past the alloc.
+	var vs []ir.I32
+	for i := 0; i < 70; i++ {
+		vs = append(vs, e.I32.Load(e.Ptr.Add(p, e.I64.Const(int64(i*4)))))
+	}
+	sum := vs[0]
+	for _, v := range vs[1:] {
+		sum = e.I32.Add(sum, v)
+	}
+	e.I32.Store(sum, p)
+	e.Return()
+	o := lowerObj(t, m, lower.Options{ASIC: feature.GFX942})
+	if kd := o.KernelDescriptors()[0]; kd.PrivateSegmentFixedSize < 8192 {
+		t.Errorf("private segment = %d", kd.PrivateSegmentFixedSize)
+	}
+	lowers(t, m, feature.GFX942, "v_mov_b32_e32 v57, 0x2", "scratch_store_dword v57, v")
+}

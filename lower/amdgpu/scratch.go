@@ -36,8 +36,13 @@ import (
 // sgprSpillVGPR is the VGPR whose lanes hold spilled scalars.
 const sgprSpillVGPR = 59
 
-// The largest frame a 13-bit scratch offset reaches.
-const maxFrame = 4096
+// The first offset a 13-bit scratch offset field does not reach; past
+// it the offset travels in offsetVGPR. The frame itself is bounded by
+// the private segment, which the descriptor states in 32 bits.
+const (
+	maxScratchOffset = 4096
+	offsetVGPR       = 57
+)
 
 // errNeedScratch says a function has to be lowered again with scratch.
 var errNeedScratch = errors.New("the function spills")
@@ -71,9 +76,6 @@ func layoutFrame(fn *ir.Func) (*frame, error) {
 		at += uint32(size)
 	}
 	fr.allocEnd = alignUp32(at, 8)
-	if fr.allocEnd > maxFrame {
-		return nil, fmt.Errorf("a private segment of %d bytes exceeds the %d a scratch offset reaches; not lowered yet", at, maxFrame)
-	}
 	return fr, nil
 }
 

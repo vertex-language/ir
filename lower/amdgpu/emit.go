@@ -437,16 +437,35 @@ func (e *emitter) spillLoad(op spillLoadOp, in mir.Instr) error {
 	return nil
 }
 
-// scratchAt is a scratch slot's address: no vector offset, and the zero
+// scratchAt is a scratch slot's address: the frame's base, and the
+// offset in the instruction where it fits its thirteen bits, in a
+// reserved VGPR where it does not.
 // SGPR as the base where "off" is not one.
 func (e *emitter) scratchAt(off int64, base []mir.VReg) operand.MemOperand {
-	if e.x.device {
-		return operand.Scratch(nil, reg.SGPR(fpSGPR)).Off(int32(off))
+	var saddr reg.Reg
+	switch {
+	case e.x.device:
+		saddr = reg.SGPR(fpSGPR)
+	case len(base) > 0:
+		saddr = e.reg(base[0])
 	}
-	if len(base) > 0 {
-		return operand.Scratch(nil, e.reg(base[0])).Off(int32(off))
+	return e.scratchFrom(saddr, off)
+}
+
+// scratchFrom is scratch at saddr + off, with a large offset moved into
+// the reserved VGPR first.
+func (e *emitter) scratchFrom(saddr reg.Reg, off int64) operand.MemOperand {
+	if off >= maxScratchOffset {
+		e.text.Emit("v_mov_b32", reg.VGPR(offsetVGPR), immediate(off))
+		if saddr == nil {
+			return operand.Scratch(reg.VGPR(offsetVGPR))
+		}
+		return operand.Scratch(reg.VGPR(offsetVGPR), saddr)
 	}
-	return operand.Scratch(nil).Off(int32(off))
+	if saddr == nil {
+		return operand.Scratch(nil).Off(int32(off))
+	}
+	return operand.Scratch(nil, saddr).Off(int32(off))
 }
 
 // —— a device function's frame ——
@@ -535,7 +554,7 @@ func (e *emitter) prologue() error {
 	e.text.Emit("s_mov_b64", execSave, reg.EXEC)
 	e.text.Emit("s_mov_b64", reg.EXEC, operand.Imm(-1))
 	for _, v := range e.savedV {
-		e.text.Emit("scratch_store_dword", operand.Scratch(nil, sp).Off(int32(e.saveSlot(v))), reg.VGPR(v))
+		e.text.Emit("scratch_store_dword", e.scratchFrom(sp, e.saveSlot(v)), reg.VGPR(v))
 	}
 	e.text.Emit("s_waitcnt", operand.NewWaitCnt().VM(0).LGKM(0))
 	e.text.Emit("s_mov_b64", reg.EXEC, execSave)
@@ -565,7 +584,7 @@ func (e *emitter) epilogue() {
 	e.text.Emit("s_mov_b64", execSave, reg.EXEC)
 	e.text.Emit("s_mov_b64", reg.EXEC, operand.Imm(-1))
 	for _, v := range e.savedV {
-		e.text.Emit("scratch_load_dword", reg.VGPR(v), operand.Scratch(nil, sp).Off(int32(e.saveSlot(v))))
+		e.text.Emit("scratch_load_dword", reg.VGPR(v), e.scratchFrom(sp, e.saveSlot(v)))
 	}
 	e.text.Emit("s_waitcnt", operand.NewWaitCnt().VM(0).LGKM(0))
 	e.text.Emit("s_mov_b64", reg.EXEC, execSave)

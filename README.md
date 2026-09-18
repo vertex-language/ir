@@ -356,8 +356,9 @@ else.
     with any is structurized — every block behind a flow that narrows
     `exec` to the lanes whose predicate is set. `ptr.alloc` is a flat
     pointer into the private segment and the allocator spills to it —
-    VGPRs to scratch slots, SGPRs to lanes of a reserved VGPR — up to a
-    4 KB frame, which is what a scratch offset reaches. `br_table` is
+    VGPRs to scratch slots, SGPRs to lanes of a reserved VGPR; an
+    offset past the 4 KB a scratch instruction reaches travels in a
+    VGPR. `br_table` is
     an if-chain and §E is unrolled to sixty-four bytes and a byte loop
     past that. A dynamic `alloca` is still in the queue. A per-lane
     trap condition is a mask tested against `exec` and one scalar

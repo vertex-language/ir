@@ -364,9 +364,6 @@ func (l *lowerer) lowerFuncWith(fn *ir.Func, fr *frame, scratch bool) error {
 	if err != nil {
 		return fmt.Errorf("lower: @%s: %w", fn.Name(), err)
 	}
-	if fr.size() > maxFrame {
-		return fmt.Errorf("lower: @%s: a private segment of %d bytes exceeds the %d a scratch offset reaches; not lowered yet", fn.Name(), fr.size(), maxFrame)
-	}
 	if fr.slots*2 > 64 {
 		return fmt.Errorf("lower: @%s: %d spill slots, more than the 32 the scalar-spill VGPR's lanes hold; not lowered yet", fn.Name(), fr.slots)
 	}

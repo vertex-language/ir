@@ -94,7 +94,7 @@ const (
 const (
 	sgprSinglesFrom, sgprSinglesTo = 8, 31   // s8..s31
 	sgprPairsFrom, sgprPairsTo     = 32, 100 // s[32:33]..s[100:101]
-	vgprSinglesFrom, vgprSinglesTo = 1, 57   // v1..v57; v58 holds a callee's saved SGPRs, v59 spilled ones, v[60:63] is casScratch
+	vgprSinglesFrom, vgprSinglesTo = 1, 56   // v1..v56; v57 a large scratch offset, v58 a callee's saved SGPRs, v59 spilled ones, v[60:63] casScratch
 	vgprPairsFrom, vgprPairsTo     = 64, 254 // v[64:65]..v[254:255]
 )
 
