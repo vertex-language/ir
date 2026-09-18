@@ -312,7 +312,7 @@ else.
 | §D3 pointer ops | all but `tlsaddr` | all but `tlsaddr` | all but `tlsaddr` | `alloc`, `alloca`, `getaddr`, `diff`, stack save/restore ⁶ | `alloc`, `getaddr`, `diff` ¹¹ |
 | §E bulk memory | ✅ non-`volatile` | ✅ non-`volatile` | ✅ non-`volatile` | ✅ as byte loops | ✅ as byte loops |
 | §F select | ✅ | ✅ | ✅ | ✅ | ✅ |
-| §G · §G2 calls, terminators, computed branches | ✅ | ✅ | ✅ | all but `brind` ⁷ | all but `brind`; calls inlined ¹¹ |
+| §G · §G2 calls, terminators, computed branches | ✅ | ✅ | ✅ | all but `brind` ⁷ | all but `brind` ¹⁴ |
 | §G3 unwinding — `invoke`, `invokeind`, `resume` | — | Mach-O | — | — ⁸ | — ⁸ |
 | §G4 inline assembly | — | — | — | `asm`; not `asm goto` | — |
 | §H atomics | ✅ | ✅ | ✅ | ✅ with scopes ⁹; not the narrow forms | ✅ with scopes ¹²; not the narrow forms |
@@ -359,9 +359,9 @@ else.
     VGPRs to scratch slots, SGPRs to lanes of a reserved VGPR — up to a
     4 KB frame, which is what a scratch offset reaches. `br_table` is
     an if-chain and §E is unrolled to sixty-four bytes and a byte loop
-    past that. A dynamic `alloca` and the device calling convention are
-    still in the queue. A per-lane trap condition is a mask tested
-    against `exec` and one scalar branch.
+    past that. A dynamic `alloca` is still in the queue. A per-lane
+    trap condition is a mask tested against `exec` and one scalar
+    branch.
 12. Each generation's memory model as LLVM emits it: `glc` and
     `buffer_wbinvl1_vol` on GFX9, `buffer_wbl2`/`buffer_invl2` at system
     scope on gfx90a, and gfx940's `sc0`/`sc1` bits with `buffer_wbl2`
@@ -373,6 +373,16 @@ else.
     the participating lanes; on this hardware every active lane
     participates, and the mask narrows a ballot only on a 32-wide wave,
     where its bits can name them.
+14. Every call a kernel makes is inlined first; what stays a call — a
+    call through a pointer, a device function's own calls — uses the
+    backend's own convention: arguments and results in `v0` upward, the
+    return address in `s[30:31]` from `s_swappc_b64`, `s32`/`s33` the
+    stack and frame pointers on the private segment, and a callee that
+    saves every register it touches. A kernel's private segment is its
+    own frame plus the deepest chain of frames beneath it, so recursion
+    is refused, as is a function pointer that differs across the wave
+    and an argument list past thirty-two dwords. A call to an import
+    needs a dynamic relocation the code object writer does not emit.
 4. `f128` on amd64 is compiler-rt — §0 is explicit that a namespace the
    layout admits is usable whether or not silicon implements it, and
    that lowering supplies the call. Its §A3 rows are the arithmetic and

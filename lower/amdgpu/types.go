@@ -94,7 +94,7 @@ const (
 const (
 	sgprSinglesFrom, sgprSinglesTo = 8, 31   // s8..s31
 	sgprPairsFrom, sgprPairsTo     = 32, 100 // s[32:33]..s[100:101]
-	vgprSinglesFrom, vgprSinglesTo = 1, 58   // v1..v58; v59 holds spilled SGPRs, v[60:63] is casScratch
+	vgprSinglesFrom, vgprSinglesTo = 1, 57   // v1..v57; v58 holds a callee's saved SGPRs, v59 spilled ones, v[60:63] is casScratch
 	vgprPairsFrom, vgprPairsTo     = 64, 254 // v[64:65]..v[254:255]
 )
 
@@ -138,19 +138,25 @@ func halfOf(p regalloc.PhysReg, hi bool) reg.Reg {
 	panic(fmt.Sprintf("amdgpu: %d is not a pair", p))
 }
 
-// pool is the four-class register pool.
-func pool() *regalloc.Pool {
+// pool is the four-class register pool. A function that calls, or is
+// called, leaves the argument VGPRs and the convention's SGPRs alone;
+// see call.go.
+func pool(calling bool) *regalloc.Pool {
 	var v32s, v64s, s32s, s64s []regalloc.PhysReg
-	for n := vgprSinglesFrom; n <= vgprSinglesTo; n++ {
+	vFrom, sTo, pFrom := vgprSinglesFrom, sgprSinglesTo, sgprPairsFrom
+	if calling {
+		vFrom, sTo, pFrom = argVGPRsFirst, retAddrSGPR-1, callTempSGPR+2
+	}
+	for n := vFrom; n <= vgprSinglesTo; n++ {
 		v32s = append(v32s, physOf(v32, n))
 	}
 	for n := vgprPairsFrom; n <= vgprPairsTo; n += 2 {
 		v64s = append(v64s, physOf(v64, n))
 	}
-	for n := sgprSinglesFrom; n <= sgprSinglesTo; n++ {
+	for n := sgprSinglesFrom; n <= sTo; n++ {
 		s32s = append(s32s, physOf(s32, n))
 	}
-	for n := sgprPairsFrom; n <= sgprPairsTo; n += 2 {
+	for n := pFrom; n <= sgprPairsTo; n += 2 {
 		s64s = append(s64s, physOf(s64, n))
 	}
 	p := regalloc.NewPool(v32s)
@@ -204,6 +210,7 @@ const (
 	oPrivateBase   // the scratch aperture, src_private_base
 	oFlatScratchLo // flat_scratch_lo
 	oFlatScratchHi // flat_scratch_hi
+	oFP            // s33, the frame pointer
 	oCache         // a cache-control instruction's scope bits
 	oFixedV        // a fixed VGPR, number imm; a tuple of i registers when i > 1
 )

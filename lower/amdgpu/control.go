@@ -98,6 +98,9 @@ func (x *fnState) selectTerm(c *cursor, in *ir.Inst) error {
 		c.mf.Succ(c.blk, els)
 
 	case ir.VReturn:
+		if x.device {
+			return x.ret(c, in)
+		}
 		if len(in.Args()) > 0 {
 			return fmt.Errorf("a kernel returns nothing")
 		}

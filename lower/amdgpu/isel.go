@@ -326,7 +326,12 @@ func (x *fnState) selectInst(c *cursor, in *ir.Inst) error {
 		return x.bulk(c, in)
 
 	// —— §W ——
-	case ir.VWorkitemID, ir.VWorkgroupID, ir.VWorkgroupSize, ir.VNumWorkgroups, ir.VLaneID, ir.VWaveSize:
+	case ir.VWorkitemID, ir.VWorkgroupID, ir.VWorkgroupSize, ir.VNumWorkgroups:
+		if x.device {
+			return fmt.Errorf("a device function has no work-item ids; the kernel's arrive in registers a call does not pass, so the function is inlined or told its id")
+		}
+		return x.workitem(c, in)
+	case ir.VLaneID, ir.VWaveSize:
 		return x.workitem(c, in)
 	case ir.VWaveShflIdx, ir.VWaveShflUp, ir.VWaveShflDown, ir.VWaveShflXor,
 		ir.VWaveReadFirstLane, ir.VWaveBallot, ir.VWaveAny, ir.VWaveAll:
@@ -355,7 +360,7 @@ func (x *fnState) selectBare(c *cursor, in *ir.Inst) error {
 	case ir.VFence:
 		return x.fence(c, in)
 	case ir.VCall, ir.VCallInd:
-		return fmt.Errorf("calls are not lowered yet")
+		return x.call(c, in)
 	case ir.VMemCpy, ir.VMemMove, ir.VMemSet, ir.VMemCmp:
 		return x.bulk(c, in)
 	}
@@ -895,8 +900,8 @@ func accessWidth(t ir.RegType, v ir.Verb) int {
 // it in two rel32 halves, into an SGPR pair and then into the VGPRs.
 func (x *fnState) getaddr(c *cursor, in *ir.Inst) error {
 	sym := in.Symbol()
-	if f, ok := sym.(*ir.Func); ok {
-		return fmt.Errorf("the address of @%s: functions are not lowered yet", f.Name())
+	if f, ok := sym.(*ir.Func); ok && isKernel(f) {
+		return fmt.Errorf("the address of @%s: a kernel is launched, not called", f.Name())
 	}
 	d, err := x.result(in)
 	if err != nil {

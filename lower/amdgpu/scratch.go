@@ -129,7 +129,14 @@ func (x *fnState) alloc(c *cursor, in *ir.Inst) error {
 	}
 	ap := x.vr.temp(s64)
 	c.Emit(mir.Instr{Op: amdOp{mn: "s_mov_b64", ops: []opnd{def(0), {kind: oPrivateBase}}}, Defs: rs(ap)})
-	x.emit(c, "v_mov_b32", rs(d), nil, defLo(0), imm(int64(off)))
+	if x.device {
+		// The frame sits at the frame pointer.
+		lo := x.vr.temp(s32)
+		c.Emit(mir.Instr{Op: amdOp{mn: "s_add_u32", ops: []opnd{def(0), {kind: oFP}, imm(int64(off))}}, Defs: rs(lo)})
+		x.emit(c, "v_mov_b32", rs(d), rs(lo), defLo(0), use(0))
+	} else {
+		x.emit(c, "v_mov_b32", rs(d), nil, defLo(0), imm(int64(off)))
+	}
 	x.emit(c, "v_mov_b32", rs(d), rs(ap, d), defHi(0), useHi(0))
 	if in.Zeroed() {
 		size, _, _ := allocShape(in)

@@ -36,6 +36,8 @@
 //     scratch is selected again with it; see scratch.go.
 //   - The rest of the table: the wave verbs (wave.go), §E as unrolled
 //     copies and byte loops, and br_table as an if-chain (bulk.go).
+//   - 36, calls. A device convention of the backend's own, for what
+//     the inliner leaves; see call.go.
 //
 // # What is different about this target
 //
@@ -89,11 +91,12 @@ type Options struct {
 // Lower builds an AMDGPU code object from m.
 //
 // Every call a kernel makes is inlined into it first, which changes m:
-// a device function has no calling convention on this target yet, and
-// its body copied into each kernel that calls it is the one way it runs.
-// A device function that is not exported is left alone once its callers
-// have their copies; an exported one is refused, since something outside
-// the module would call it.
+// a call is a frame on the private segment and a callee that saves
+// every register it touches, and a body copied into the kernel is
+// faster than either. What stays a call — a call through a pointer, a
+// call the inliner left, a device function's own calls — goes through
+// the convention in call.go. A device function is emitted when it is
+// exported, called, or has its address taken; the rest are left alone.
 func Lower(m *ir.Module, opts Options) (*amdgpuobj.Object, error) {
 	if err := checkLayout(m); err != nil {
 		return nil, err
@@ -118,7 +121,7 @@ func Lower(m *ir.Module, opts Options) (*amdgpuobj.Object, error) {
 		mopts = append(mopts, amdgpuasm.WithFeatures(opts.Features))
 	}
 	am := amdgpuasm.NewModule(mopts...)
-	l := &lowerer{m: m, opts: opts, am: am}
+	l := &lowerer{m: m, opts: opts, am: am, frameNeed: map[string]uint32{}}
 
 	for _, f := range m.FuncImports() {
 		am.Extern(f.Name())
@@ -130,16 +133,57 @@ func Lower(m *ir.Module, opts Options) (*amdgpuobj.Object, error) {
 		return nil, err
 	}
 	for _, it := range m.Items() {
-		switch x := it.(type) {
-		case *ir.Func:
-			if err := l.lowerFunc(x); err != nil {
-				return nil, err
-			}
-		case *ir.ModuleAsm:
+		if _, ok := it.(*ir.ModuleAsm); ok {
 			return nil, fmt.Errorf("lower: a module-level asm block is not emitted yet")
 		}
 	}
+	order, err := orderFuncs(m.Funcs())
+	if err != nil {
+		return nil, err
+	}
+	live := referenced(m)
+	for _, f := range order {
+		if !isKernel(f) && !live[f] {
+			continue
+		}
+		if err := l.lowerFunc(f); err != nil {
+			return nil, err
+		}
+	}
 	return am.Finalize()
+}
+
+// referenced is the device functions the object has to hold: exported
+// ones, and every function a kernel or another referenced function
+// calls or takes the address of.
+func referenced(m *ir.Module) map[*ir.Func]bool {
+	live := map[*ir.Func]bool{}
+	var work []*ir.Func
+	for _, f := range m.Funcs() {
+		if isKernel(f) || f.Linkage() == ir.Export {
+			live[f] = true
+			work = append(work, f)
+		}
+	}
+	for len(work) > 0 {
+		f := work[0]
+		work = work[1:]
+		f.WalkInsts(func(in *ir.Inst) bool {
+			var g *ir.Func
+			switch in.Op().Verb {
+			case ir.VCall:
+				g, _ = in.Callee().(*ir.Func)
+			case ir.VGetAddr:
+				g, _ = in.Symbol().(*ir.Func)
+			}
+			if g != nil && !live[g] {
+				live[g] = true
+				work = append(work, g)
+			}
+			return true
+		})
+	}
+	return live
 }
 
 func isKernel(f *ir.Func) bool { return f.Signature().CallConv() == ir.Kernel }
@@ -169,6 +213,11 @@ type lowerer struct {
 	// offset, and the total a kernel that reaches any of them asks for.
 	lds     map[string]uint32
 	ldsSize uint32
+
+	// frameNeed is each device function's scratch from its SP on: its
+	// own frame and the deepest chain beneath it. Callees are lowered
+	// first, so a caller finds its callees here.
+	frameNeed map[string]uint32
 }
 
 // wave64 reports whether the wave is 64 lanes wide, which every GFX9
@@ -177,12 +226,6 @@ func (l *lowerer) wave64() bool { return l.am.WaveSize() != feature.Wave32 }
 
 // lowerFunc runs the pipeline for one function.
 func (l *lowerer) lowerFunc(fn *ir.Func) error {
-	if !isKernel(fn) {
-		if fn.Linkage() == ir.Export {
-			return fmt.Errorf("lower: @%s: an exported device function; there is no calling convention for the device yet, and only a kernel's own calls are inlined", fn.Name())
-		}
-		return nil
-	}
 	if _, ok := fn.AsmBodyText(); ok {
 		return fmt.Errorf("lower: @%s: a function whose body is assembly is not emitted yet", fn.Name())
 	}
@@ -196,7 +239,9 @@ func (l *lowerer) lowerFunc(fn *ir.Func) error {
 	if err != nil {
 		return fmt.Errorf("lower: @%s: %w", fn.Name(), err)
 	}
-	scratch := len(fr.allocs) > 0
+	// A device function always has a frame, for what it saves; a kernel
+	// has one when it allocs or calls, and gets one when it spills.
+	scratch := len(fr.allocs) > 0 || !isKernel(fn) || len(callees(fn)) > 0 || hasCallInd(fn)
 	for {
 		err := l.lowerFuncWith(fn, fr, scratch)
 		if err == errNeedScratch && !scratch {
@@ -215,7 +260,9 @@ func (l *lowerer) lowerFunc(fn *ir.Func) error {
 func (l *lowerer) lowerFuncWith(fn *ir.Func, fr *frame, scratch bool) error {
 	uni := analyzeUniformity(fn)
 	mf := mir.NewFunc()
-	pool := pool()
+	device := !isKernel(fn)
+	calls := len(callees(fn)) > 0 || hasCallInd(fn)
+	pool := pool(device || calls)
 	vr := newVRegs(mf, pool, len(fn.Params()))
 
 	blocks := fn.Blocks()
@@ -227,8 +274,13 @@ func (l *lowerer) lowerFuncWith(fn *ir.Func, fr *frame, scratch bool) error {
 	if err != nil {
 		return err
 	}
-	x := &fnState{l: l, fn: fn, mf: mf, vr: vr, uni: uni, k: k, divergent: uni.needsStructure(fn), scratch: scratch, frame: fr}
-	if err := x.entry(mbs[0]); err != nil {
+	x := &fnState{l: l, fn: fn, mf: mf, vr: vr, uni: uni, k: k, divergent: uni.needsStructure(fn), scratch: scratch, frame: fr, device: device, calls: calls}
+	if device {
+		err = x.entryDevice(mbs[0])
+	} else {
+		err = x.entry(mbs[0])
+	}
+	if err != nil {
 		return fmt.Errorf("lower: @%s: %w", fn.Name(), err)
 	}
 	// Block parameters get vregs before any block is selected, since an

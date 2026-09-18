@@ -13,6 +13,7 @@ import (
 	"github.com/vertex-language/amdgpu/operand"
 	"github.com/vertex-language/amdgpu/reg"
 
+	"github.com/vertex-language/ir/lower/globals"
 	"github.com/vertex-language/ir/lower/mir"
 	"github.com/vertex-language/ir/lower/regalloc"
 )
@@ -34,9 +35,36 @@ func (l *lowerer) emit(x *fnState, assigned map[mir.VReg]regalloc.PhysReg) error
 			}
 		}
 	}
-	k := l.am.Kernel(x.fn.Name(), x.kernelOptions(vgprs, sgprs)...)
-	text := k.Section()
-	e := &emitter{text: text, assigned: assigned, trapLabel: x.fn.Name() + ".trap"}
+	e := &emitter{assigned: assigned, trapLabel: x.fn.Name() + ".trap", x: x}
+	var text *amdgpuasm.Section
+	if x.device {
+		// A device function: a symbol in .text, and a frame it saves the
+		// registers it touches into.
+		text = l.am.Section(amdgpuasm.Text)
+		text.Align(4)
+		binding := amdgpuasm.Local
+		switch globals.FuncBinding(x.fn) {
+		case globals.Global:
+			binding = amdgpuasm.Global
+		case globals.Weak:
+			binding = amdgpuasm.Weak
+		}
+		text.Label(x.fn.Name(), amdgpuasm.Func, binding)
+		e.text = text
+		e.planSaves(vgprs, sgprs)
+		if err := e.prologue(); err != nil {
+			return fmt.Errorf("lower: @%s: %w", x.fn.Name(), err)
+		}
+		l.frameNeed[x.fn.Name()] = e.frameTotal() + l.calleeNeed(x.fn)
+	} else {
+		opts := x.kernelOptions(vgprs, sgprs)
+		if x.scratch {
+			opts = append(opts, amdgpuasm.WithScratch(int(x.frame.size()+l.calleeNeed(x.fn))))
+		}
+		k := l.am.Kernel(x.fn.Name(), opts...)
+		text = k.Section()
+		e.text = text
+	}
 	e.forward(x.mf.Blocks)
 	var blocks []*mir.Block
 	for _, b := range x.mf.Blocks {
@@ -90,6 +118,13 @@ func registerCounts(assigned map[mir.VReg]regalloc.PhysReg) (vgprs, sgprs int) {
 type emitter struct {
 	text     *amdgpuasm.Section
 	assigned map[mir.VReg]regalloc.PhysReg
+	x        *fnState
+
+	// A device function's saves: the VGPRs it stores to its frame from
+	// saveBase on, and the SGPRs it writes into lanes of v58.
+	savedV   []int
+	savedS   []int
+	saveBase int64
 
 	// fwd is where a branch to an empty block goes instead: an edge block
 	// whose every copy the allocator coalesced away is a branch and
@@ -216,7 +251,27 @@ func (e *emitter) instr(in mir.Instr, next string) error {
 			e.text.Emit("s_branch", operand.NewLabel(t))
 		}
 	case endpgmOp:
-		e.text.Emit("s_endpgm")
+		if e.x.device {
+			e.epilogue()
+		} else {
+			e.text.Emit("s_endpgm")
+		}
+	case callResultsOp:
+	case spInitOp:
+		e.text.Emit("s_mov_b32", reg.SGPR(spSGPR), immediate(int64(e.x.frame.size())))
+	case callOp:
+		t := reg.S2(reg.SGPR(callTempSGPR))
+		if op.sym != "" {
+			e.text.Emit("s_getpc_b64", t)
+			e.text.Emit("s_add_u32", reg.SGPR(callTempSGPR), reg.SGPR(callTempSGPR), operand.Ref(op.sym, obj.RefRel32Lo).WithAddend(4))
+			e.text.Emit("s_addc_u32", reg.SGPR(callTempSGPR+1), reg.SGPR(callTempSGPR+1), operand.Ref(op.sym, obj.RefRel32Hi).WithAddend(12))
+		} else {
+			// The pointer, from the first active lane.
+			p := in.Uses[len(in.Uses)-1]
+			e.text.Emit("v_readfirstlane_b32", reg.SGPR(callTempSGPR), e.half(p, false))
+			e.text.Emit("v_readfirstlane_b32", reg.SGPR(callTempSGPR+1), e.half(p, true))
+		}
+		e.text.Emit("s_swappc_b64", reg.S2(reg.SGPR(retAddrSGPR)), t)
 	case trapOp:
 		e.text.Emit("s_trap", operand.Imm(2))
 	case trapIfOp:
@@ -311,6 +366,8 @@ func (e *emitter) operand(o opnd, in mir.Instr) operand.Operand {
 		return reg.FLAT_SCRATCH_LO
 	case oFlatScratchHi:
 		return reg.FLAT_SCRATCH_HI
+	case oFP:
+		return reg.SGPR(fpSGPR)
 	case oCache:
 		return operand.Cache(o.glc, o.sc1)
 	case oFixedV:
@@ -378,10 +435,153 @@ func (e *emitter) spillLoad(op spillLoadOp, in mir.Instr) error {
 // scratchAt is a scratch slot's address: no vector offset, and the zero
 // SGPR as the base where "off" is not one.
 func (e *emitter) scratchAt(off int64, base []mir.VReg) operand.MemOperand {
+	if e.x.device {
+		return operand.Scratch(nil, reg.SGPR(fpSGPR)).Off(int32(off))
+	}
 	if len(base) > 0 {
 		return operand.Scratch(nil, e.reg(base[0])).Off(int32(off))
 	}
 	return operand.Scratch(nil).Off(int32(off))
+}
+
+// —— a device function's frame ——
+
+// planSaves decides what a device function saves: every VGPR the
+// assignment or a fixed use touches, less the result registers; every
+// SGPR it touches plus the convention's own.
+func (e *emitter) planSaves(vgprs, sgprs int) {
+	results, _ := argSlots(retTypes(e.x.fn.Signature()))
+	isResult := map[int]bool{}
+	for _, s := range results {
+		isResult[s.phys] = true
+		if s.w == v64 {
+			isResult[s.phys+1] = true
+		}
+	}
+	usedV, usedS := map[int]bool{}, map[int]bool{}
+	for _, p := range e.assigned {
+		switch {
+		case p >= physV64:
+			usedV[int(p-physV64)], usedV[int(p-physV64)+1] = true, true
+		case p >= physS64:
+			usedS[int(p-physS64)], usedS[int(p-physS64)+1] = true, true
+		case p >= physV32:
+			usedV[int(p-physV32)] = true
+		default:
+			usedS[int(p)] = true
+		}
+	}
+	for _, b := range e.x.mf.Blocks {
+		for _, in := range b.Instrs {
+			switch op := in.Op.(type) {
+			case amdOp:
+				for _, o := range op.ops {
+					if o.kind == oFixedV {
+						for i := 0; i < max(o.i, 1); i++ {
+							usedV[int(o.imm)+i] = true
+						}
+					}
+				}
+			case spillStoreOp:
+				if op.w == s32 || op.w == s64 {
+					usedV[sgprSpillVGPR] = true
+				}
+			}
+		}
+	}
+	for _, n := range []int{retAddrSGPR, retAddrSGPR + 1, fpSGPR} {
+		usedS[n] = true
+	}
+	e.savedS = sortedKeys(usedS)
+	usedV[sgprSaveVGPR] = true
+	for n := range usedV {
+		if !isResult[n] {
+			e.savedV = append(e.savedV, n)
+		}
+	}
+	sortInts(e.savedV)
+	e.saveBase = int64(e.x.frame.size())
+}
+
+// frameTotal is the device function's frame: allocs, spill slots, saves.
+func (e *emitter) frameTotal() uint32 {
+	return uint32(e.saveBase) + 4*uint32(len(e.savedV))
+}
+
+func (e *emitter) saveSlot(v int) int64 {
+	for i, n := range e.savedV {
+		if n == v {
+			return e.saveBase + 4*int64(i)
+		}
+	}
+	return -1
+}
+
+// prologue saves the registers and sets the frame up. The VGPR saves
+// run with every lane enabled: v58's lanes are about to hold SGPRs,
+// whichever lanes are active, and every register's inactive lanes are
+// the caller's to get back.
+func (e *emitter) prologue() error {
+	if len(e.savedS) > 64 {
+		return fmt.Errorf("%d SGPRs to save, more than the lanes of one VGPR hold", len(e.savedS))
+	}
+	sp, fp := reg.SGPR(spSGPR), reg.SGPR(fpSGPR)
+	execSave := reg.S2(reg.SGPR(callTempSGPR))
+	e.text.Emit("s_mov_b64", execSave, reg.EXEC)
+	e.text.Emit("s_mov_b64", reg.EXEC, operand.Imm(-1))
+	for _, v := range e.savedV {
+		e.text.Emit("scratch_store_dword", operand.Scratch(nil, sp).Off(int32(e.saveSlot(v))), reg.VGPR(v))
+	}
+	e.text.Emit("s_waitcnt", operand.NewWaitCnt().VM(0).LGKM(0))
+	e.text.Emit("s_mov_b64", reg.EXEC, execSave)
+	for lane, s := range e.savedS {
+		e.text.Emit("s_mov_b32", reg.M0, operand.Imm(int32(lane)))
+		e.text.Emit("v_writelane_b32", reg.VGPR(sgprSaveVGPR), reg.SGPR(s), reg.M0)
+	}
+	e.text.Emit("s_mov_b32", fp, sp)
+	e.text.Emit("s_add_u32", sp, sp, immediate(int64(e.frameTotal())))
+	return nil
+}
+
+// epilogue is the prologue undone, and the return.
+func (e *emitter) epilogue() {
+	sp, fp := reg.SGPR(spSGPR), reg.SGPR(fpSGPR)
+	fpLane := -1
+	for lane, s := range e.savedS {
+		if s == fpSGPR {
+			fpLane = lane
+			continue
+		}
+		e.text.Emit("v_readlane_b32", reg.SGPR(s), reg.VGPR(sgprSaveVGPR), operand.Imm(int32(lane)))
+	}
+	e.text.Emit("s_mov_b32", sp, fp)
+	e.text.Emit("v_readlane_b32", fp, reg.VGPR(sgprSaveVGPR), operand.Imm(int32(fpLane)))
+	execSave := reg.S2(reg.SGPR(callTempSGPR))
+	e.text.Emit("s_mov_b64", execSave, reg.EXEC)
+	e.text.Emit("s_mov_b64", reg.EXEC, operand.Imm(-1))
+	for _, v := range e.savedV {
+		e.text.Emit("scratch_load_dword", reg.VGPR(v), operand.Scratch(nil, sp).Off(int32(e.saveSlot(v))))
+	}
+	e.text.Emit("s_waitcnt", operand.NewWaitCnt().VM(0).LGKM(0))
+	e.text.Emit("s_mov_b64", reg.EXEC, execSave)
+	e.text.Emit("s_setpc_b64", reg.S2(reg.SGPR(retAddrSGPR)))
+}
+
+func sortedKeys(m map[int]bool) []int {
+	var out []int
+	for k := range m {
+		out = append(out, k)
+	}
+	sortInts(out)
+	return out
+}
+
+func sortInts(a []int) {
+	for i := 1; i < len(a); i++ {
+		for j := i; j > 0 && a[j] < a[j-1]; j-- {
+			a[j], a[j-1] = a[j-1], a[j]
+		}
+	}
 }
 
 // lane writes an SGPR into one lane of the reserved VGPR. The lane

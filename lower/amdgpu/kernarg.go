@@ -136,11 +136,8 @@ func (x *fnState) kernelOptions(vgprs, sgprs int) []amdgpuasm.KernelOption {
 	if x.l.ldsSize > 0 {
 		opts = append(opts, amdgpuasm.WithLDS(int(x.l.ldsSize)))
 	}
-	if x.scratch {
-		opts = append(opts, amdgpuasm.WithScratch(int(x.frame.size())))
-		if !x.l.architectedScratch() {
-			opts = append(opts, amdgpuasm.WithFlatScratchInit())
-		}
+	if x.scratch && !x.l.architectedScratch() {
+		opts = append(opts, amdgpuasm.WithFlatScratchInit())
 	}
 	return opts
 }
@@ -165,6 +162,8 @@ type fnState struct {
 	// scratch instructions take before gfx940.
 	scratch     bool
 	frame       *frame
+	device      bool // a device function: parameters in VGPRs, a frame on the stack, s_setpc to return
+	calls       bool // the function calls: the argument registers are kept clear and SP is set up
 	fsInit      mir.VReg
 	waveOff     mir.VReg
 	scratchZero mir.VReg
@@ -221,6 +220,17 @@ func (x *fnState) entry(mb *mir.Block) error {
 	for i := 0; i < n; i++ {
 		x.tid[i] = vr.fresh(v32)
 		vr.pin(x.tid[i], physOf(v32, i))
+	}
+	if x.calls {
+		// A call passes arguments in v0 upward: the ids leave their
+		// pinned registers now, so no argument's pin collides with
+		// theirs, and SP starts past the kernel's own frame.
+		for i := 0; i < n; i++ {
+			t := vr.fresh(v32)
+			emitCopy(c, t, x.tid[i], v32)
+			x.tid[i] = t
+		}
+		c.Emit(mir.Instr{Op: spInitOp{}})
 	}
 
 	if initScratch {
