@@ -166,6 +166,28 @@ func referenced(m *ir.Module) map[*ir.Func]bool {
 			work = append(work, f)
 		}
 	}
+	// A global's initializer may hold a function's address: a table of
+	// function pointers, a vtable.
+	var walkInit func(i ir.Init)
+	walkInit = func(i ir.Init) {
+		if i.Kind() == ir.InitRelocKind {
+			for _, sym := range []ir.Symbol{i.Reloc().Sym, i.Reloc().Minus} {
+				if g, ok := sym.(*ir.Func); ok && !live[g] {
+					live[g] = true
+					work = append(work, g)
+				}
+			}
+		}
+		for _, e := range i.Elems() {
+			walkInit(e)
+		}
+		for _, f := range i.FieldVals() {
+			walkInit(f.Init)
+		}
+	}
+	for _, g := range m.Globals() {
+		walkInit(g.Initializer())
+	}
 	for len(work) > 0 {
 		f := work[0]
 		work = work[1:]

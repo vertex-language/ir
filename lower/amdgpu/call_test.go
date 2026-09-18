@@ -122,3 +122,39 @@ func TestWaterfall(t *testing.T) {
 		t.Errorf("the waterfall should hold one call:\n%s", text)
 	}
 }
+
+// A table of function pointers in the data: the functions are emitted
+// because the table names them, and the code object carries a dynamic
+// relocation for each entry.
+func TestFunctionTable(t *testing.T) {
+	m := ir.NewModule("tbl", ir.AMDGCN)
+	fT := m.FuncType("f_t", ir.NewSig().Param(ir.TypeI32).Ret(ir.TypeI32))
+	dbl := m.Func("dbl").Internal().ReturnsI32().NoUnwind()
+	dx := dbl.ParamI32("x")
+	dbl.Entry().Return(dbl.Entry().I32.Mul(dx, dbl.Entry().I32.Const(2)))
+	inc := m.Func("inc").Internal().ReturnsI32().NoUnwind()
+	ix := inc.ParamI32("x")
+	inc.Entry().Return(inc.Entry().I32.Add(ix, inc.Entry().I32.Const(1)))
+	tbl := m.Global("tbl", ir.RW, ir.Array(2, ir.StorePtr.FType())).Align(8).
+		Init(ir.List(ir.RelocInit(dbl), ir.RelocInit(inc)))
+
+	k := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+	p := k.ParamPtr("p")
+	e := k.Entry()
+	tid := e.I32.WorkitemID(ir.X)
+	slot := e.Ptr.Add(e.Ptr.GetAddr(tbl), e.I64.Shl(e.I64.ZExtI32(e.I32.And(tid, e.I32.Const(1))), e.I64.Const(3)))
+	r := e.CallInd(e.Ptr.Load(slot), fT, tid).I32(0)
+	e.I32.Store(r, p)
+	e.Return()
+
+	o := lowerObj(t, m, lower.Options{ASIC: feature.GFX942})
+	for _, name := range []string{"dbl", "inc", "tbl"} {
+		if _, ok := o.Symbol(name); !ok {
+			t.Errorf("no symbol %s", name)
+		}
+	}
+	if refs := o.SectionNamed(".data").Refs(); len(refs) != 2 {
+		t.Errorf("the table carries %d references, want 2", len(refs))
+	}
+	lowers(t, m, feature.GFX942, "s_swappc_b64")
+}

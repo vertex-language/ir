@@ -383,8 +383,9 @@ else.
     is refused, as is an argument list past thirty-two dwords. A
     function pointer that differs across the wave is a waterfall loop:
     each pass calls the first active lane's target for the lanes that
-    share it. A call to an import needs a dynamic relocation the code
-    object writer does not emit.
+    share it. A global holding a function's address — a table of them, a
+    vtable — is a dynamic relocation the code object carries. A call to
+    an import is refused: nothing links a code object against another.
 15. The template goes through the `amdgpu` repo's assembler with each
     `%N` the operand's register. Constraint `v` (or `reg`) is the value's
     own register — a VGPR, or an SGPR pair for an `i1` — and `s` reads
