@@ -861,12 +861,15 @@ The grammar admits these; a verifier rejects them.
     this, since `naked` is a `func-placement` and the body is a separate
     production; a `naked` function with blocks would be asking a backend to
     lower instructions into a function with no frame to lower them against.
-20. A `kernel` signature has no `ret`, no `var-tail`, and no `byval` or
-    `sret` parameter; a `kernel` function is a definition, not an import,
-    and is not `naked`; no `ptr.getaddr`, `call`, or `invoke` names a
-    `kernel`. A kernel is launched by the host over a grid; its parameters
-    arrive in the kernel-argument buffer, it has no caller to return to, and
-    nothing on the device can reach it.
+20. A `kernel` signature has no `ret`, no `var-tail`, and no `sret`
+    parameter; a `kernel` function is a definition, not an import, and is
+    not `naked`; no `ptr.getaddr`, `call`, or `invoke` names a `kernel`. A
+    kernel is launched by the host over a grid; its parameters arrive in
+    the kernel-argument buffer, it has no caller to return to, and nothing
+    on the device can reach it. A `byval` kernel parameter is the aggregate
+    itself in the buffer, at its own size and alignment, the way a CUDA or
+    HIP kernel takes a struct by value: the host launches with one argument
+    per parameter, and the aggregate is that argument, not its fields.
 21. A `shared` global's initializer is `zeroed`. Workgroup storage begins
     when the workgroup does and nothing can fill it sooner.
 22. A `tail_call`'s callee — the named function for `tail_call`, the named

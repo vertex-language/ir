@@ -196,3 +196,25 @@ func TestImplicitIDs(t *testing.T) {
 		lowers(t, m, asic, append(c.wants, "20, v31", "v_mov_b32_e32 v32, s37", "v_mov_b32_e32 v33, s39")...)
 	}
 }
+
+// A struct by value: the aggregate lies in the kernarg buffer at its own
+// offset, and the parameter is its address there.
+func TestKernelByVal(t *testing.T) {
+	m := ir.NewModule("kbv", ir.AMDGCN)
+	pair := m.Struct("pair").Field("a", ir.StoreI32.FType()).Field("b", ir.StoreI64.FType())
+	k := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+	n := k.ParamI32("n")
+	p := k.ParamPtr("p", ir.ByVal(pair))
+	out := k.ParamPtr("out")
+	e := k.Entry()
+	b := e.I64.Load(e.Ptr.Add(p, e.I64.Const(8)))
+	e.I64.Store(e.I64.Add(b, e.I64.SExtI32(e.I32.Add(n, e.I32.Load(p)))), out)
+	e.Return()
+	o := lowerObj(t, m, lower.Options{ASIC: feature.GFX942})
+	kd := o.KernelDescriptors()[0]
+	// n at 0, the pair at 8 (its alignment), out at 24.
+	if len(kd.Args) < 3 || kd.Args[1].Offset != 8 || kd.Args[1].Size != 16 || kd.Args[2].Offset != 24 {
+		t.Fatalf("kernel arguments: %+v", kd.Args)
+	}
+	lowers(t, m, feature.GFX942, "s_add_u32 s", "s_addc_u32 s", "s_load_dword s")
+}

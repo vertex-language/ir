@@ -44,7 +44,19 @@ func (x *fn) call(in *ir.Inst) error {
 	x.b.Scope(func(inner *ptx.Body) {
 		x.b = inner
 		var pargs, prets []ptx.Operand
+		sigParams := sig.Params()
 		for i, a := range args {
+			if i < len(sigParams) {
+				if bv, ok := byValOf(sigParams[i]); ok {
+					// The aggregate the pointer names, copied into the
+					// .param array the callee reads it from.
+					size, align, _ := sizeAlign(bv.FType())
+					p := inner.Local(ptx.Var{Space: ptx.ParamSpace, Type: ptx.B8, Align: int(align), Len: int(size), Name: "_a" + itoa(i)})
+					pargs = append(pargs, p)
+					x.copyToParam(inner, p, x.v(a), size, align)
+					continue
+				}
+			}
 			p := inner.Local(ptx.Var{Space: ptx.ParamSpace, Type: paramType(a.Type()), Name: "_a" + itoa(i)})
 			pargs = append(pargs, p)
 			v := x.v(a)
@@ -81,4 +93,19 @@ func (x *fn) call(in *ir.Inst) error {
 	})
 	x.b = outer
 	return nil
+}
+
+// copyToParam copies size bytes from the generic address in src into a
+// .param byte array, in the widest pieces the alignment admits.
+func (x *fn) copyToParam(b *ptx.Body, p *ptx.Var, src ptx.Reg, size, align uint64) {
+	var off uint64
+	for _, w := range []uint64{8, 4, 2, 1} {
+		t := map[uint64]ptx.Type{8: ptx.B64, 4: ptx.B32, 2: ptx.B16, 1: ptx.B8}[w]
+		for off+w <= size && (align%w == 0 || w == 1) {
+			r := b.Regs.New(regTypeFor(w))
+			b.Ld(t, r, ptx.At(src, int64(off)))
+			b.St(t, ptx.At(p, int64(off)), r, ptx.ParamSpace)
+			off += w
+		}
+	}
 }

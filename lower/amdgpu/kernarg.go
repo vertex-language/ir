@@ -43,6 +43,17 @@ type kernelPlan struct {
 	wgIDs [3]bool // workgroup id y and z system SGPRs
 	wiIDs int     // work-item id VGPRs: 1, 2 or 3
 	lds   uint32  // group segment
+	byval []int   // the parameters that are aggregates in the buffer
+}
+
+// byValOf is the aggregate a byval parameter carries, if it is one.
+func byValOf(p ir.Param) (*ir.Type, bool) {
+	for _, a := range p.Attrs {
+		if a.IsByVal() {
+			return a.Type(), true
+		}
+	}
+	return nil, false
 }
 
 // newKernel plans the kernel argument buffer and the ids the body reads.
@@ -51,14 +62,29 @@ func (l *lowerer) newKernel(fn *ir.Func) (*kernelPlan, error) {
 	var off uint32
 	for i, p := range fn.Signature().Params() {
 		size, align, kind := uint32(4), uint32(4), amdgpuobj.ByValue
-		switch p.Type {
-		case ir.TypeI64, ir.TypeF64:
-			size, align = 8, 8
-		case ir.TypePtr:
-			size, align, kind = 8, 8, amdgpuobj.GlobalBuffer
-		case ir.TypeI1, ir.TypeI32, ir.TypeF32:
-		default:
-			return nil, fmt.Errorf("lower: @%s: parameter %d is %s, which no kernel argument holds", fn.Name(), i, p.Type)
+		if bv, ok := byValOf(p); ok {
+			// The aggregate itself, in the buffer: the parameter is its
+			// address there. The buffer is the dispatcher's and read-only;
+			// a body that stores through the parameter is not caught yet.
+			s, a, err := sizeAlign(bv.FType())
+			if err != nil {
+				return nil, fmt.Errorf("lower: @%s: parameter %d: %w", fn.Name(), i, err)
+			}
+			size, align = uint32(s), uint32(a)
+			if align < 4 {
+				align = 4
+			}
+			k.byval = append(k.byval, i)
+		} else {
+			switch p.Type {
+			case ir.TypeI64, ir.TypeF64:
+				size, align = 8, 8
+			case ir.TypePtr:
+				size, align, kind = 8, 8, amdgpuobj.GlobalBuffer
+			case ir.TypeI1, ir.TypeI32, ir.TypeF32:
+			default:
+				return nil, fmt.Errorf("lower: @%s: parameter %d is %s, which no kernel argument holds", fn.Name(), i, p.Type)
+			}
 		}
 		off = alignUp32(off, align)
 		k.args = append(k.args, amdgpuobj.KernelArg{Name: p.Name, Size: size, Offset: off, Kind: kind})
@@ -255,10 +281,27 @@ func (x *fnState) entry(mb *mir.Block) error {
 		x.scratchPrologue(c)
 	}
 
-	// The arguments: scalar loads at their offsets, then copies out.
+	// The arguments: scalar loads at their offsets, then copies out. A
+	// byval aggregate is where it lies: the parameter is the kernarg
+	// pointer plus its offset.
+	byval := map[int]bool{}
+	for _, i := range x.k.byval {
+		byval[i] = true
+	}
 	for i, d := range x.fn.Params() {
 		w, _ := widthOf(d.Type())
 		off := int64(x.k.argOffset[i])
+		if byval[i] {
+			s := vr.fresh(s64)
+			c.Emit(mir.Instr{Op: amdOp{mn: "s_add_u32", ops: []opnd{{kind: oDefLo}, {kind: oUseLo, i: 0}, {kind: oImm, imm: off}}}, Defs: []mir.VReg{s}, Uses: []mir.VReg{x.kernarg}})
+			c.Emit(mir.Instr{Op: amdOp{mn: "s_addc_u32", ops: []opnd{{kind: oDefHi}, {kind: oUseHi, i: 0}, {kind: oImm, imm: 0}}}, Defs: []mir.VReg{s}, Uses: []mir.VReg{x.kernarg}})
+			v, err := vr.define(d)
+			if err != nil {
+				return err
+			}
+			x.movPair(c, v, s)
+			continue
+		}
 		switch w {
 		case v32, s64:
 			s := vr.fresh(s32)

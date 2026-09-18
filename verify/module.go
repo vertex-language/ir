@@ -107,8 +107,8 @@ func (c *checker) kernelShape(f *ir.Func) {
 	}
 	for i, p := range sig.Params() {
 		for _, a := range p.Attrs {
-			if a.IsByVal() || a.IsSRet() {
-				c.failItem(ErrKernel, "kernel @%s parameter %d carries %s; an aggregate kernel argument is by value in the buffer, and its fields are the frontend's to flatten", f.Name(), i, a)
+			if a.IsSRet() {
+				c.failItem(ErrKernel, "kernel @%s parameter %d carries sret; a kernel returns nothing", f.Name(), i)
 			}
 		}
 	}

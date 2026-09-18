@@ -311,3 +311,69 @@ func TestRunVecAdd(t *testing.T) {
 		}
 	}
 }
+
+// A struct by value, into a kernel and on through a call the inliner is
+// told to leave: the .param byte arrays on both sides, on the hardware.
+func TestRunByVal(t *testing.T) {
+	m := ir.NewModule("byval", ir.NVPTX64)
+	pair := m.Struct("pair").Field("a", ir.StoreI32.FType()).Field("b", ir.StoreI64.FType())
+
+	// sum(p byval pair) i64 = p.a + p.b
+	sum := m.Func("sum").Internal().ReturnsI64().NoUnwind()
+	sp := sum.ParamPtr("p", ir.ByVal(pair))
+	se := sum.Entry()
+	a := se.I32.Load(sp)
+	b := se.I64.Load(se.Ptr.Add(sp, se.I64.Const(8)))
+	se.Return(se.I64.Add(se.I64.SExtI32(a), b))
+
+	// k(p byval pair, out ptr): out[0] = sum(p) + p.a
+	k := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+	kp := k.ParamPtr("p", ir.ByVal(pair))
+	out := k.ParamPtr("out")
+	ke := k.Entry()
+	r := ke.Call(sum, kp).I64(0)
+	ke.I64.Store(ke.I64.Add(r, ke.I64.SExtI32(ke.I32.Load(kp))), out)
+	ke.Return()
+
+	c := device(t)
+	if err := verify.Module(m); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	opts := c.options()
+	opts.Inline = false
+	pm, err := lower.Lower(m, opts)
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+	src, err := text.Print(pm)
+	if err != nil {
+		t.Fatalf("print: %v", err)
+	}
+	if !strings.Contains(src, ".param .align 8 .b8 _p_p[16]") {
+		t.Fatalf("no byval parameter array in:\n%s", src)
+	}
+	mod, err := c.load(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(mod.unload)
+	f, err := mod.function("k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type pairT struct {
+		A int32
+		_ int32
+		B int64
+	}
+	arg := pairT{A: 5, B: 1000}
+	res := make([]int64, 1)
+	bo, po := deviceSlice(t, c, res)
+	if err := c.launch(f, [3]uint32{1, 1, 1}, [3]uint32{1, 1, 1}, 0, unsafe.Pointer(&arg), unsafe.Pointer(po)); err != nil {
+		t.Fatalf("%v\n%s", err, src)
+	}
+	readBack(t, bo, res)
+	if res[0] != 1010 {
+		t.Fatalf("out = %d, want 1010\n%s", res[0], src)
+	}
+}

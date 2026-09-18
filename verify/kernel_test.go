@@ -46,10 +46,22 @@ func TestKernelVariadic(t *testing.T) {
 	wantItemFault(t, verify.Module(m), verify.ErrKernel)
 }
 
+// A byval kernel parameter is the aggregate in the argument buffer; an
+// sret one has no result to fill.
 func TestKernelByVal(t *testing.T) {
 	m, k := kernelModule()
 	s := m.Struct("s").Field("a", i32())
 	k.ParamPtr("p", ir.ByVal(s))
+	k.Entry().Return()
+	if err := verify.Module(m); err != nil {
+		t.Fatalf("byval kernel parameter refused: %v", err)
+	}
+}
+
+func TestKernelSRet(t *testing.T) {
+	m, k := kernelModule()
+	s := m.Struct("s").Field("a", i32())
+	k.ParamPtr("p", ir.SRet(s))
 	k.Entry().Return()
 	wantItemFault(t, verify.Module(m), verify.ErrKernel)
 }

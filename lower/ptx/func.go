@@ -61,6 +61,14 @@ func (l *lowerer) declareFunc(f *ir.Func) error {
 		k := ptx.NewKernel(symName(f.Name()))
 		k.Linkage = funcLinkage(f)
 		for i, p := range f.Signature().Params() {
+			if bv, ok := byValOf(p); ok {
+				size, align, err := sizeAlign(bv.FType())
+				if err != nil {
+					return fmt.Errorf("lower: @%s: parameter %d: %w", f.Name(), i, err)
+				}
+				k.Params = append(k.Params, &ptx.Param{Name: paramName(p, i), Type: ptx.B8, Align: int(align), Len: int(size)})
+				continue
+			}
 			k.Param(paramName(p, i), paramType(p.Type))
 		}
 		l.kernels[f] = k
@@ -127,23 +135,38 @@ func (l *lowerer) newFunc(name string, sig *ir.Sig) (*ptx.Func, error) {
 	if sig.IsVariadic() {
 		return nil, fmt.Errorf("variadic; PTX has no va_list")
 	}
-	for i, p := range sig.Params() {
-		for _, a := range p.Attrs {
-			if a.IsByVal() || a.IsSRet() {
-				return nil, fmt.Errorf("parameter %d carries %s, which is not lowered yet", i, a)
-			}
-		}
-	}
 	pf := ptx.NewFunc(symName(name))
 	if sh := retShapeOf(sig); sh.single {
 		pf.Return("_r", sh.typ)
 	} else if len(sig.Rets()) > 1 {
 		pf.Ret = append(pf.Ret, &ptx.Param{Name: "_r", Type: ptx.B8, Align: sh.align, Len: sh.size})
 	}
+	// A byval parameter is the aggregate itself in .param space, a byte
+	// array of its size; an sret one is the pointer it is, the attribute
+	// being the caller's promise about the storage and nothing the
+	// callee reads differently.
 	for i, p := range sig.Params() {
+		if bv, ok := byValOf(p); ok {
+			size, align, err := sizeAlign(bv.FType())
+			if err != nil {
+				return nil, fmt.Errorf("parameter %d: %w", i, err)
+			}
+			pf.Params = append(pf.Params, &ptx.Param{Name: paramName(p, i), Type: ptx.B8, Align: int(align), Len: int(size)})
+			continue
+		}
 		pf.Param(paramName(p, i), paramType(p.Type))
 	}
 	return pf, nil
+}
+
+// byValOf is the aggregate a byval parameter carries, if it is one.
+func byValOf(p ir.Param) (*ir.Type, bool) {
+	for _, a := range p.Attrs {
+		if a.IsByVal() {
+			return a.Type(), true
+		}
+	}
+	return nil, false
 }
 
 func paramName(p ir.Param, i int) string {
@@ -211,6 +234,7 @@ type fn struct {
 	// ptr.alloc, addressed as a generic pointer plus a constant offset.
 	depot   ptx.Reg
 	allocAt map[*ir.Inst]int64
+	byvalAt map[int]int64 // a byval parameter's copy, by parameter index
 }
 
 func (l *lowerer) lowerFunc(f *ir.Func) error {
@@ -220,6 +244,7 @@ func (l *lowerer) lowerFunc(f *ir.Func) error {
 		regs:    map[*ir.Def]ptx.Reg{},
 		labels:  map[*ir.Block]*ptx.Label{},
 		protos:  map[*ir.Type]*ptx.Proto{},
+		byvalAt: map[int]int64{},
 		allocAt: map[*ir.Inst]int64{},
 	}
 	if k, ok := l.kernels[f]; ok {
@@ -265,8 +290,12 @@ func (x *fn) prologue() error {
 	} else {
 		params = x.pf.Params
 	}
+	sigParams := x.f.Signature().Params()
 	for i, d := range x.f.Params() {
 		p := params[i]
+		if _, ok := byValOf(sigParams[i]); ok {
+			continue // copied into the depot below, once it exists
+		}
 		r := x.v(d)
 		if d.Type() == ir.TypeI1 {
 			t := x.body.Regs.New(ptx.B32)
@@ -276,13 +305,73 @@ func (x *fn) prologue() error {
 		}
 		x.body.Ld(memT(d.Type()), r, ptx.At(p), ptx.ParamSpace)
 	}
-	return x.layoutDepot()
+	if err := x.layoutDepot(); err != nil {
+		return err
+	}
+	// A byval aggregate lives in .param space, which nothing but ld.param
+	// reads: it is copied into the depot, where its address is generic
+	// and the body can take it, store through it, and pass it on.
+	for i, d := range x.f.Params() {
+		bv, ok := byValOf(sigParams[i])
+		if !ok {
+			continue
+		}
+		size, _, _ := sizeAlign(bv.FType())
+		off := x.byvalAt[i]
+		r := x.v(d)
+		x.body.Add(ptx.U64, r, x.depot, ptx.Imm(off))
+		x.copyParam(params[i], r, size)
+	}
+	return nil
+}
+
+// copyParam copies a .param byte array to the generic address in dst,
+// in the widest pieces its size admits.
+func (x *fn) copyParam(p *ptx.Param, dst ptx.Reg, size uint64) {
+	var off uint64
+	for _, w := range []uint64{8, 4, 2, 1} {
+		t := map[uint64]ptx.Type{8: ptx.B64, 4: ptx.B32, 2: ptx.B16, 1: ptx.B8}[w]
+		for off+w <= size && (p.Align == 0 || uint64(p.Align)%w == 0 || w == 1) {
+			r := x.body.Regs.New(regTypeFor(w))
+			x.body.Ld(t, r, ptx.At(p, int64(off)), ptx.ParamSpace)
+			x.body.St(t, ptx.At(dst, int64(off)), r)
+			off += w
+		}
+	}
+}
+
+// regTypeFor is the register type a memory access of w bytes needs.
+func regTypeFor(w uint64) ptx.Type {
+	switch w {
+	case 8:
+		return ptx.B64
+	case 4:
+		return ptx.B32
+	}
+	return ptx.B16
 }
 
 // layoutDepot sizes the local depot from the entry block's allocations,
 // which §19.6 confines there, and gives each its offset.
 func (x *fn) layoutDepot() error {
 	var size, align uint64 = 0, 1
+	// The byval parameters' copies, ahead of the allocations.
+	for i, p := range x.f.Signature().Params() {
+		bv, ok := byValOf(p)
+		if !ok {
+			continue
+		}
+		s, a, err := sizeAlign(bv.FType())
+		if err != nil {
+			return fmt.Errorf("parameter %d: %w", i, err)
+		}
+		size = alignUp(size, a)
+		x.byvalAt[i] = int64(size)
+		size += s
+		if a > align {
+			align = a
+		}
+	}
 	entry := x.f.Blocks()[0]
 	for _, in := range entry.Insts() {
 		if in.Op().Verb != ir.VAlloc {
