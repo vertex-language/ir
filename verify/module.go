@@ -42,6 +42,19 @@ func (c *checker) moduleItems(m *ir.Module) {
 			return
 		}
 	}
+	// §19.24: a shared import is dynamic workgroup storage, an array of
+	// length 0 whose extent the launch supplies.
+	for _, g := range m.GlobalImports() {
+		if g.Domain() != ir.Shared {
+			continue
+		}
+		if t := g.Type(); t.Kind() != ir.FTypeArray || t.Len() != 0 {
+			c.failItem(ErrShared, "import @%s is shared and %s; dynamic workgroup storage is an array of length 0, its extent being the launch's", g.Name(), t)
+		}
+		if c.full() {
+			return
+		}
+	}
 	c.kernels(m)
 }
 

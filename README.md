@@ -367,7 +367,11 @@ else.
     `buffer_wbinvl1_vol` on GFX9, `buffer_wbl2`/`buffer_invl2` at system
     scope on gfx90a, and gfx940's `sc0`/`sc1` bits with `buffer_wbl2`
     and `buffer_inv`. An access whose pointer provably came from a
-    `shared` global is a `ds_*` instruction; the rest is flat. A narrow
+    `shared` global is a `ds_*` instruction; the rest is flat. A `shared`
+    import -- dynamic workgroup storage, §19.24 -- lies past the module's
+    own LDS at the group segment size the descriptor states, where the
+    dispatch appends what the launch asked for; PTX declares it `.extern
+    .shared name[]`. A narrow
     read-modify-write or compare-and-swap is a compare-and-swap loop on
     the containing dword, and so is a float atomic add on a generation
     with no instruction for it — `f32` through a flat pointer before

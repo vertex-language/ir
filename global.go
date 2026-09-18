@@ -310,6 +310,7 @@ type GlobalImport struct {
 	m         *Module
 	name      string
 	typ       FType
+	domain    Domain // Shared for dynamic workgroup storage; zero otherwise
 	vis       Visibility
 	weak      bool
 	section   string
@@ -352,6 +353,17 @@ func (m *Module) ImportGlobal(name string, t FType) *GlobalImport {
 }
 
 func (g *GlobalImport) Hidden() *GlobalImport    { g.vis = Hidden; return g }
+
+// Shared makes the import dynamic workgroup storage (§5): the storage a
+// launch sizes, which no module defines. Its type is an array whose
+// length is 0 -- the extent is the launch's -- and every shared import
+// of a module begins at the same address, the start of that storage,
+// which is CUDA's `extern __shared__` and HIP's.
+func (g *GlobalImport) Shared() *GlobalImport { g.domain = Shared; return g }
+
+// Domain is Shared for dynamic workgroup storage and zero for an
+// ordinary import, which lives wherever its definition put it.
+func (g *GlobalImport) Domain() Domain { return g.domain }
 func (g *GlobalImport) Protected() *GlobalImport { g.vis = Protected; return g }
 
 // DLLImport describes how this module reaches a symbol another module defines.

@@ -227,7 +227,11 @@ func (pr *printer) global(g *ir.Global) {
 
 func (pr *printer) globalImport(g *ir.GlobalImport) {
 	pr.mod(g.Visibility().String(), weakMod(g.IsWeak()))
-	pr.f("import global @%s %s", g.Name(), g.Type().String())
+	if g.Domain() == ir.Shared {
+		pr.f("import global @%s shared %s", g.Name(), g.Type().String())
+	} else {
+		pr.f("import global @%s %s", g.Name(), g.Type().String())
+	}
 	pr.globalPlacements(g.SectionAttr(), g.ComdatAttr, g.AlignAttr(), g.TLSModelAttr())
 	pr.attached(g.Attached())
 	pr.nl()

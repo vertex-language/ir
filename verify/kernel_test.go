@@ -103,3 +103,15 @@ func TestSharedInitialized(t *testing.T) {
 	m.Global("tile", ir.Shared, i32()).Init(ir.Lit(ir.Int(1)))
 	wantItemFault(t, verify.Module(m), verify.ErrShared)
 }
+
+// A shared import is dynamic workgroup storage: an array of length 0.
+func TestSharedImport(t *testing.T) {
+	m := ir.NewModule("t", ir.NVPTX64)
+	m.ImportGlobal("dyn", ir.Array(0, i32())).Shared()
+	if err := verify.Module(m); err != nil {
+		t.Fatalf("shared import refused: %v", err)
+	}
+	m2 := ir.NewModule("t", ir.NVPTX64)
+	m2.ImportGlobal("sized", ir.Array(4, i32())).Shared()
+	wantItemFault(t, verify.Module(m2), verify.ErrShared)
+}

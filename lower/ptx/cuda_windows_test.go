@@ -377,3 +377,42 @@ func TestRunByVal(t *testing.T) {
 		t.Fatalf("out = %d, want 1010\n%s", res[0], src)
 	}
 }
+
+// Dynamic workgroup storage: an unsized shared import, sized by the
+// launch, read back after a barrier.
+func TestRunDynamicShared(t *testing.T) {
+	m := ir.NewModule("dyn", ir.NVPTX64)
+	dyn := m.ImportGlobal("dyn", ir.Array(0, ir.StoreI32.FType())).Shared()
+	k := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+	p := k.ParamPtr("p")
+	e := k.Entry()
+	tid := e.I32.WorkitemID(ir.X)
+	width := e.I32.WorkgroupSize(ir.X)
+	off := e.I64.Shl(e.I64.ZExtI32(tid), e.I64.Const(2))
+	base := e.Ptr.GetAddr(dyn)
+	e.I32.Store(e.I32.Mul(tid, e.I32.Const(3)), e.Ptr.Add(base, off))
+	e.Barrier()
+	// Each work-item reads its neighbour's word, wrapping.
+	nb := e.I32.URem(e.I32.Add(tid, e.I32.Const(1)), width)
+	v := e.I32.Load(e.Ptr.Add(base, e.I64.Shl(e.I64.ZExtI32(nb), e.I64.Const(2))))
+	e.I32.Store(v, e.Ptr.Add(p, off))
+	e.Return()
+
+	c, mod := run(t, m)
+	f, err := mod.function("k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 64
+	out := make([]int32, n)
+	bo, po := deviceSlice(t, c, out)
+	if err := c.launch(f, [3]uint32{1, 1, 1}, [3]uint32{n, 1, 1}, n*4, unsafe.Pointer(po)); err != nil {
+		t.Fatal(err)
+	}
+	readBack(t, bo, out)
+	for i := range out {
+		if want := int32((i + 1) % n * 3); out[i] != want {
+			t.Fatalf("out[%d] = %d, want %d", i, out[i], want)
+		}
+	}
+}

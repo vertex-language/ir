@@ -219,6 +219,18 @@ func (l *lowerer) declareGlobalImport(g *ir.GlobalImport) {
 		l.fail(fmt.Errorf("lower: import @%s is %s: %w", g.Name(), g.Type(), err))
 		return
 	}
+	if g.Domain() == ir.Shared {
+		// Dynamic workgroup storage: .extern .shared with no length,
+		// which the launch's shared memory size supplies, and which
+		// every such declaration of the module shares the start of.
+		if align < 16 {
+			align = 16
+		}
+		v := &ptx.Var{Linkage: ptx.Extern, Space: ptx.Shared, Align: int(align), Type: ptx.B8, Name: symName(g.Name()), Len: -1}
+		l.vars[g] = v
+		l.pm.Add(v)
+		return
+	}
 	if size == 0 {
 		size = 1
 	}

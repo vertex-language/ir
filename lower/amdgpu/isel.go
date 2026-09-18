@@ -907,6 +907,9 @@ func (x *fnState) getaddr(c *cursor, in *ir.Inst) error {
 	if g, ok := sym.(*ir.Global); ok && g.Domain() == ir.Shared {
 		return x.getaddrShared(c, d, g)
 	}
+	if g, ok := sym.(*ir.GlobalImport); ok && g.Domain() == ir.Shared {
+		return x.getaddrShared(c, d, g)
+	}
 	pc, addr := x.vr.temp(s64), x.vr.temp(s64)
 	x.emit(c, "s_getpc_b64", []mir.VReg{pc}, nil, def(0))
 	c.Emit(mir.Instr{Op: amdOp{mn: "s_add_u32", ops: []opnd{defLo(0), useLo(0), {kind: oSymLo, sym: sym.Name(), imm: 4}}},

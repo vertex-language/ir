@@ -276,7 +276,7 @@ alias-decl   ::= linkage? visibility? "weak"? "alias"
 import-decl        ::= visibility? "weak"? "import"
                         ( "func"   FuncName   abs-signature
                                               import-placement*
-                        | "global" GlobalName ftype
+                        | "global" GlobalName "shared"? ftype
                                               global-placement* ) meta*
 func-def           ::= linkage? visibility? "weak"? "func" FuncName signature
                         func-placement* meta* func-body
@@ -793,7 +793,7 @@ None of the following requires a grammar change beyond the noted production.
 | Function memory effects | `func-placement` and `import-placement` gain members (`readnone`, `readonly`, `argmemonly`). |
 | Pointer parameter facts | `param-attr` gains members (`nonnull`, `dereferenceable`, `align`). |
 | Half floats | `reg-type` and `store-type` gain `f16` / `bf16`; `layout` gains an attribute admitting them. |
-| Dynamic workgroup storage | An `import-decl` of a `shared` global with `[0]` length; `workitem-verb` gains `dynamic_shared_size`. |
+| Dynamic workgroup storage | `workitem-verb` gains `dynamic_shared_size`; the `shared` import itself is §19.24. |
 | Address-space attributes | `mem-attr` gains `"space" ident`. |
 | New metadata kinds | New `!ident` names; no production changes. |
 | Wider extended floats | `ext-float` gains a member; `layout`'s `extfloat` attribute admits it. |
@@ -872,6 +872,13 @@ The grammar admits these; a verifier rejects them.
     per parameter, and the aggregate is that argument, not its fields.
 21. A `shared` global's initializer is `zeroed`. Workgroup storage begins
     when the workgroup does and nothing can fill it sooner.
+24. An `import-decl` of a `global` may say `shared`: it is dynamic workgroup
+    storage, which no module defines and a launch sizes. Its `ftype` is an
+    array of length 0, the element type saying what the storage is read as,
+    and every `shared` import of a module begins at the same address -- the
+    start of the storage the launch supplied, past the module's own `shared`
+    globals -- as CUDA's `extern __shared__` arrays all do. On a target with
+    no workgroups it is refused with the `shared` globals.
 22. A `tail_call`'s callee — the named function for `tail_call`, the named
     function type for `tail_callind` — returns what the enclosing function
     returns: the same number of results, each of the same register type.

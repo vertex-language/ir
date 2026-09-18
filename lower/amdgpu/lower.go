@@ -128,10 +128,28 @@ func Lower(m *ir.Module, opts Options) (*amdgpuobj.Object, error) {
 		am.Extern(f.Name())
 	}
 	for _, g := range m.GlobalImports() {
+		if g.Domain() == ir.Shared {
+			continue // dynamic workgroup storage: an offset, not a symbol
+		}
 		am.Extern(g.Name())
 	}
 	if err := globals.Lower(globalTarget{l: l}, m); err != nil {
 		return nil, err
+	}
+	// Dynamic workgroup storage begins where the module's own ends,
+	// aligned for anything: the launch adds its size to the segment.
+	for _, g := range m.GlobalImports() {
+		if g.Domain() != ir.Shared {
+			continue
+		}
+		if l.lds == nil {
+			l.lds = map[string]uint32{}
+		}
+		// The runtime appends the launch's storage at the stated size:
+		// the size is stated aligned, so the storage begins aligned.
+		l.ldsSize = alignUp32(l.ldsSize, 16)
+		l.lds[g.Name()] = l.ldsSize
+		l.dynamicLDS = true
 	}
 	for _, it := range m.Items() {
 		if _, ok := it.(*ir.ModuleAsm); ok {
@@ -236,6 +254,10 @@ type lowerer struct {
 	// offset, and the total a kernel that reaches any of them asks for.
 	lds     map[string]uint32
 	ldsSize uint32
+
+	// dynamicLDS says a shared import names storage past ldsSize that
+	// the launch sizes; the group segment stated is then a floor.
+	dynamicLDS bool
 
 	// frameNeed is each device function's scratch from its SP on: its
 	// own frame and the deepest chain beneath it. Callees are lowered

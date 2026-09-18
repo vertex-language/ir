@@ -58,8 +58,13 @@ func sharedPtr(p *ir.Def) bool {
 		}
 		switch in.Op().Verb {
 		case ir.VGetAddr:
-			g, ok := in.Symbol().(*ir.Global)
-			return ok && g.Domain() == ir.Shared
+			switch g := in.Symbol().(type) {
+			case *ir.Global:
+				return g.Domain() == ir.Shared
+			case *ir.GlobalImport:
+				return g.Domain() == ir.Shared
+			}
+			return false
 		case ir.VAdd, ir.VSub:
 			if in.Op().Type != ir.TypePtr {
 				return false
@@ -74,7 +79,7 @@ func sharedPtr(p *ir.Def) bool {
 
 // getaddrShared is a shared global's flat address: the aperture's high
 // half over the LDS offset.
-func (x *fnState) getaddrShared(c *cursor, d mir.VReg, g *ir.Global) error {
+func (x *fnState) getaddrShared(c *cursor, d mir.VReg, g ir.Symbol) error {
 	off, ok := x.l.lds[g.Name()]
 	if !ok {
 		return fmt.Errorf("@%s has no LDS offset", g.Name())

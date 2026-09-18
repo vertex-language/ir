@@ -313,3 +313,29 @@ func TestLargeFrame(t *testing.T) {
 	}
 	lowers(t, m, feature.GFX942, "v_mov_b32_e32 v57, 0x2", "scratch_store_dword v57, v")
 }
+
+// Dynamic workgroup storage: an unsized shared import lies past the
+// module's own LDS, at an aligned offset the descriptor states as the
+// group segment, and reads through ds_ instructions.
+func TestDynamicShared(t *testing.T) {
+	m := ir.NewModule("dyn", ir.AMDGCN)
+	fixed := m.Global("fixed", ir.Shared, ir.Array(5, ir.StoreI32.FType())).Align(4)
+	dyn := m.ImportGlobal("dyn", ir.Array(0, ir.StoreF32.FType())).Shared()
+	k := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+	p := k.ParamPtr("p")
+	e := k.Entry()
+	tid := e.I32.WorkitemID(ir.X)
+	off := e.I64.Shl(e.I64.ZExtI32(tid), e.I64.Const(2))
+	e.I32.Store(tid, e.Ptr.Add(e.Ptr.GetAddr(fixed), off))
+	slot := e.Ptr.Add(e.Ptr.GetAddr(dyn), off)
+	e.F32.Store(e.F32.Const(1.5), slot)
+	e.Barrier()
+	e.F32.Store(e.F32.Load(slot), e.Ptr.Add(p, off))
+	e.Return()
+	o := lowerObj(t, m, lower.Options{ASIC: feature.GFX942})
+	kd := o.KernelDescriptors()[0]
+	if kd.GroupSegmentFixedSize != 32 {
+		t.Errorf("group segment = %d, want 32: five words rounded up for the dynamic storage after them", kd.GroupSegmentFixedSize)
+	}
+	lowers(t, m, feature.GFX942, "ds_write_b32", "ds_read_b32", "s_barrier")
+}

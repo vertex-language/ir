@@ -883,7 +883,7 @@ function call.
 | Function memory effects | New function placements (`readnone`, `readonly`, `argmemonly`). |
 | Pointer parameter facts | New parameter attributes (`nonnull`, `dereferenceable`, `align`). |
 | Half floats | `f16` and `bf16` as namespaces the `layout` block admits, under the same rule as `ext-float`; each pays §C's conversion cost. |
-| Dynamic workgroup storage | An unsized `shared` import and an `i32.dynamic_shared_size` row in §W1. |
+| Dynamic workgroup storage size | An `i32.dynamic_shared_size` row in §W1; the unsized `shared` import is in the grammar (§19.24). |
 | Address-space attributes | A `space` `mem-attr` naming where an access resolves, for a lowering that can prove nothing from the pointer. |
 | Metadata kinds | New `!ident` names; debug information is the first consumer. |
 
