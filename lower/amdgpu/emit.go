@@ -55,8 +55,12 @@ func (l *lowerer) emit(x *fnState, assigned map[mir.VReg]regalloc.PhysReg) error
 		if err := e.prologue(); err != nil {
 			return fmt.Errorf("lower: @%s: %w", x.fn.Name(), err)
 		}
+		e.loadAperture()
 		l.frameNeed[x.fn.Name()] = e.frameTotal() + l.calleeNeed(x.fn)
 	} else {
+		if x.scratch {
+			sgprs = max(sgprs, apertureSGPR(x.calls)+2)
+		}
 		opts := x.kernelOptions(vgprs, sgprs)
 		if x.scratch {
 			opts = append(opts, amdgpuasm.WithScratch(int(x.frame.size()+l.calleeNeed(x.fn))))
@@ -64,6 +68,7 @@ func (l *lowerer) emit(x *fnState, assigned map[mir.VReg]regalloc.PhysReg) error
 		k := l.am.Kernel(x.fn.Name(), opts...)
 		text = k.Section()
 		e.text = text
+		e.loadAperture()
 	}
 	e.forward(x.mf.Blocks)
 	var blocks []*mir.Block
@@ -318,6 +323,8 @@ func (e *emitter) instr(in mir.Instr, next string) error {
 		return e.spillStore(op, in)
 	case spillLoadOp:
 		return e.spillLoad(op, in)
+	case allocAddrOp:
+		e.allocAddr(op, in)
 	case undefOp:
 	default:
 		return fmt.Errorf("%T is not an instruction this emitter knows", in.Op)
@@ -399,6 +406,33 @@ func (e *emitter) operand(o opnd, in mir.Instr) operand.Operand {
 	panic(fmt.Sprintf("amdgpu: operand kind %d", o.kind))
 }
 
+// allocAddr is a frame slot's flat address: the aperture's high half,
+// kept in the reserved pair, over the offset -- from the frame pointer
+// in a device function.
+func (e *emitter) allocAddr(op allocAddrOp, in mir.Instr) {
+	lo, hi := e.half(in.Defs[0], false), e.half(in.Defs[0], true)
+	ap := apertureSGPR(e.x.device || e.x.calls)
+	if e.x.device {
+		e.text.Emit("v_mov_b32", lo, reg.SGPR(fpSGPR))
+		if op.off != 0 {
+			e.text.Emit("v_add_u32", lo, immediate(op.off), lo)
+		}
+	} else {
+		e.text.Emit("v_mov_b32", lo, immediate(op.off))
+	}
+	e.text.Emit("v_mov_b32", hi, reg.SGPR(ap+1))
+}
+
+// loadAperture fills the reserved pair with the private aperture, at
+// the top of a function that has a frame.
+func (e *emitter) loadAperture() {
+	if !e.x.scratch {
+		return
+	}
+	ap := apertureSGPR(e.x.device || e.x.calls)
+	e.text.Emit("s_mov_b64", reg.S2(reg.SGPR(ap)), reg.SRC_PRIVATE_BASE)
+}
+
 // spillStore and spillLoad are the spiller's instructions: a vector
 // value to its scratch slot, a scalar to lanes of the reserved VGPR.
 func (e *emitter) spillStore(op spillStoreOp, in mir.Instr) error {
@@ -429,12 +463,18 @@ func (e *emitter) spillLoad(op spillLoadOp, in mir.Instr) error {
 		e.text.Emit(mn, e.reg(in.Defs[0]), e.scratchAt(op.off, in.Uses))
 		e.text.Emit("s_waitcnt", operand.NewWaitCnt().VM(0).LGKM(0))
 	case s32:
-		e.text.Emit("v_readlane_b32", e.reg(in.Defs[0]), reg.VGPR(sgprSpillVGPR), operand.Imm(int32(op.off)))
+		e.readLane(op.off, e.reg(in.Defs[0]))
 	case s64:
-		e.text.Emit("v_readlane_b32", e.half(in.Defs[0], false), reg.VGPR(sgprSpillVGPR), operand.Imm(int32(op.off)))
-		e.text.Emit("v_readlane_b32", e.half(in.Defs[0], true), reg.VGPR(sgprSpillVGPR), operand.Imm(int32(op.off+1)))
+		e.readLane(op.off, e.half(in.Defs[0], false))
+		e.readLane(op.off+1, e.half(in.Defs[0], true))
 	}
 	return nil
+}
+
+// readLane is a spilled scalar back out of its lane.
+func (e *emitter) readLane(lane int64, dst operand.Operand) {
+	v, at := spillLaneVGPR(lane)
+	e.text.Emit("v_readlane_b32", dst, reg.VGPR(v), operand.Imm(int32(at)))
 }
 
 // scratchAt is a scratch slot's address: the frame's base, and the
@@ -508,7 +548,12 @@ func (e *emitter) planSaves(vgprs, sgprs int) {
 				}
 			case spillStoreOp:
 				if op.w == s32 || op.w == s64 {
-					usedV[sgprSpillVGPR] = true
+					v, _ := spillLaneVGPR(op.off)
+					usedV[v] = true
+					if op.w == s64 {
+						v, _ = spillLaneVGPR(op.off + 1)
+						usedV[v] = true
+					}
 				}
 			}
 		}
@@ -612,8 +657,9 @@ func sortInts(a []int) {
 // select is M0: gfx9's constant bus admits one SGPR, and the value is
 // it.
 func (e *emitter) lane(n int64, s reg.Reg) {
-	e.text.Emit("s_mov_b32", reg.M0, operand.Imm(int32(n)))
-	e.text.Emit("v_writelane_b32", reg.VGPR(sgprSpillVGPR), s, reg.M0)
+	v, at := spillLaneVGPR(n)
+	e.text.Emit("s_mov_b32", reg.M0, operand.Imm(int32(at)))
+	e.text.Emit("v_writelane_b32", reg.VGPR(v), s, reg.M0)
 }
 
 // modified wraps a source in its neg and abs modifiers.

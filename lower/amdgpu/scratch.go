@@ -47,6 +47,28 @@ const (
 // errNeedScratch says a function has to be lowered again with scratch.
 var errNeedScratch = errors.New("the function spills")
 
+// errNeedSpillVGPRs says a function has to be lowered again with n more
+// VGPRs holding spilled scalars: its scalar spills outran the lanes.
+type errNeedSpillVGPRs struct{ n int }
+
+func (e errNeedSpillVGPRs) Error() string {
+	return fmt.Sprintf("the function's scalar spills need %d more VGPRs", e.n)
+}
+
+// maxExtraSpillVGPRs bounds the VGPRs taken from the top of the singles
+// for spilled scalars, past the reserved one: v49..v56 at most.
+const maxExtraSpillVGPRs = 8
+
+// spillLaneVGPR is the VGPR a spilled scalar's lane lies in: the
+// reserved one for the first 64 lanes, then the extra ones downward
+// from the top of the singles.
+func spillLaneVGPR(lane int64) (vgpr int, laneIn int64) {
+	if lane < 64 {
+		return sgprSpillVGPR, lane
+	}
+	return vgprSinglesTo - int(lane/64-1), lane % 64
+}
+
 // frame is one function's private segment.
 type frame struct {
 	allocs   map[*ir.Inst]uint32 // each ptr.alloc's offset
@@ -119,6 +141,28 @@ func (x *fnState) scratchPrologue(c *cursor) {
 	c.Emit(mir.Instr{Op: amdOp{mn: "s_mov_b32", ops: []opnd{def(0), imm(0)}}, Defs: rs(x.scratchZero)})
 }
 
+// apertureSGPR is the SGPR pair a function with scratch keeps the
+// private aperture in, loaded once at entry: the first pair of the
+// pool's range, which the pool then starts past. Reading src_private_base
+// takes a scalar move, and an alloc's address is remade at every use
+// when it spills (see allocAddrOp), which a fixed pair makes a plain
+// VGPR move.
+func apertureSGPR(calling bool) int {
+	if calling {
+		return callPairsFrom
+	}
+	return sgprPairsFrom
+}
+
+// allocAddrOp is a ptr.alloc's address: the private aperture's high
+// half over the frame offset, or over the frame pointer plus it in a
+// device function. One instruction with no operands, so that the
+// allocator rematerializes it rather than keeping a hundred of them in
+// VGPR pairs across a body that stores every local to its slot.
+type allocAddrOp struct{ off int64 }
+
+func (allocAddrOp) String() string { return "alloc_addr" }
+
 // alloc is ptr.alloc: the private aperture's high half over the offset.
 func (x *fnState) alloc(c *cursor, in *ir.Inst) error {
 	off, ok := x.frame.allocs[in]
@@ -129,17 +173,7 @@ func (x *fnState) alloc(c *cursor, in *ir.Inst) error {
 	if err != nil {
 		return err
 	}
-	ap := x.vr.temp(s64)
-	c.Emit(mir.Instr{Op: amdOp{mn: "s_mov_b64", ops: []opnd{def(0), {kind: oPrivateBase}}}, Defs: rs(ap)})
-	if x.device {
-		// The frame sits at the frame pointer.
-		lo := x.vr.temp(s32)
-		c.Emit(mir.Instr{Op: amdOp{mn: "s_add_u32", ops: []opnd{def(0), {kind: oFP}, imm(int64(off))}}, Defs: rs(lo)})
-		x.emit(c, "v_mov_b32", rs(d), rs(lo), defLo(0), use(0))
-	} else {
-		x.emit(c, "v_mov_b32", rs(d), nil, defLo(0), imm(int64(off)))
-	}
-	x.emit(c, "v_mov_b32", rs(d), rs(ap, d), defHi(0), useHi(0))
+	c.Emit(mir.Instr{Op: allocAddrOp{off: int64(off)}, Defs: rs(d)})
 	if in.Zeroed() {
 		size, _, _ := allocShape(in)
 		zero := x.constV32(c, 0)
@@ -178,6 +212,32 @@ func (s *spiller) Slot() int {
 	slot := fr.slots
 	fr.slots++
 	return slot
+}
+
+// Rematerializable is a constant's materialization: a move of an
+// immediate into a register, which is cheaper to repeat at each use
+// than to keep in a lane or a slot.
+func (s *spiller) Rematerializable(in mir.Instr) bool {
+	if _, isAlloc := in.Op.(allocAddrOp); isAlloc {
+		return true
+	}
+	op, ok := in.Op.(amdOp)
+	if !ok || op.wait {
+		return false
+	}
+	switch op.mn {
+	case "s_mov_b32", "s_mov_b64", "v_mov_b32":
+	default:
+		return false
+	}
+	for _, o := range op.ops {
+		switch o.kind {
+		case oDef, oDefLo, oDefHi, oImm, oFImm:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Store and Load reference the zero base on the generations whose

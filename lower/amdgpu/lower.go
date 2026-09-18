@@ -265,12 +265,21 @@ func (l *lowerer) lowerFunc(fn *ir.Func) error {
 	// A device function always has a frame, for what it saves; a kernel
 	// has one when it allocs or calls, and gets one when it spills.
 	scratch := len(fr.allocs) > 0 || !isKernel(fn) || len(callees(fn)) > 0 || hasCallInd(fn)
+	extraSpill := 0
 	for {
-		err := l.lowerFuncWith(fn, fr, scratch)
+		err := l.lowerFuncWith(fn, fr, scratch, extraSpill)
 		if err == errNeedScratch && !scratch {
 			// The allocator ran out of registers: the entry needs the
 			// scratch SGPRs and a prologue, so select again with them.
 			scratch = true
+			fr.slots = 0
+			continue
+		}
+		if need, ok := err.(errNeedSpillVGPRs); ok && need.n > extraSpill && need.n <= maxExtraSpillVGPRs {
+			// The scalar spills overflowed the reserved VGPR's lanes:
+			// more VGPRs are taken from the top of the singles, and the
+			// function allocated again without them.
+			extraSpill = need.n
 			fr.slots = 0
 			continue
 		}
@@ -279,13 +288,14 @@ func (l *lowerer) lowerFunc(fn *ir.Func) error {
 }
 
 // lowerFuncWith selects, allocates and emits one kernel, with or without
-// a private segment.
-func (l *lowerer) lowerFuncWith(fn *ir.Func, fr *frame, scratch bool) error {
+// a private segment, with extraSpill VGPRs past the reserved one holding
+// spilled scalars.
+func (l *lowerer) lowerFuncWith(fn *ir.Func, fr *frame, scratch bool, extraSpill int) error {
 	uni := analyzeUniformity(fn, l.model())
 	mf := mir.NewFunc()
 	device := !isKernel(fn)
 	calls := len(callees(fn)) > 0 || hasCallInd(fn)
-	pool := pool(device || calls)
+	pool := pool(device || calls, extraSpill, scratch)
 	vr := newVRegs(mf, pool, len(fn.Params()))
 
 	blocks := fn.Blocks()
@@ -297,7 +307,7 @@ func (l *lowerer) lowerFuncWith(fn *ir.Func, fr *frame, scratch bool) error {
 	if err != nil {
 		return err
 	}
-	x := &fnState{l: l, fn: fn, mf: mf, vr: vr, uni: uni, k: k, divergent: uni.needsStructure(fn), scratch: scratch, frame: fr, device: device, calls: calls}
+	x := &fnState{l: l, fn: fn, mf: mf, vr: vr, uni: uni, k: k, divergent: uni.needsStructure(fn), scratch: scratch, frame: fr, device: device, calls: calls, extraSpill: extraSpill}
 	if device {
 		err = x.entryDevice(mbs[0])
 	} else {
@@ -364,8 +374,12 @@ func (l *lowerer) lowerFuncWith(fn *ir.Func, fr *frame, scratch bool) error {
 	if err != nil {
 		return fmt.Errorf("lower: @%s: %w", fn.Name(), err)
 	}
-	if fr.slots*2 > 64 {
-		return fmt.Errorf("lower: @%s: %d spill slots, more than the 32 the scalar-spill VGPR's lanes hold; not lowered yet", fn.Name(), fr.slots)
+	if lanes := fr.slots * 2; lanes > 64*(1+extraSpill) {
+		need := (lanes + 63) / 64 - 1
+		if need > maxExtraSpillVGPRs {
+			return fmt.Errorf("lower: @%s: %d spill slots, more than the %d the scalar-spill VGPRs' lanes hold; not lowered yet", fn.Name(), fr.slots, 32*(1+maxExtraSpillVGPRs))
+		}
+		return errNeedSpillVGPRs{need}
 	}
 	return l.emit(x, assigned)
 }

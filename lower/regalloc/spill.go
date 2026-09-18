@@ -46,6 +46,16 @@ type Spiller interface {
 	Load(slot int, v mir.VReg, c Class) mir.Instr
 }
 
+// A Rematerializer is a Spiller that can say an instruction is cheaper
+// to repeat than its result is to store: a constant, typically. A value
+// with one such def and no operands is not spilled to memory; the def
+// is copied in front of each use instead, defining a fresh vreg that
+// dies there, which costs the target no slot and no memory traffic.
+type Rematerializer interface {
+	Spiller
+	Rematerializable(in mir.Instr) bool
+}
+
 // spillState is what one Assign call remembers across its rounds.
 type spillState struct {
 	// fresh are the vregs the rewrite itself created — the ones a load
@@ -101,11 +111,16 @@ func (st *spillState) eligible(v mir.VReg, pinned map[mir.VReg]PhysReg) bool {
 // is what the instruction reads and the store's is what it produced, and
 // between those two facts the instruction ran.
 func (st *spillState) spill(f *mir.Func, pool *Pool, sp Spiller, v mir.VReg) {
-	slot := sp.Slot()
 	class := pool.ClassOf(v)
 	st.done[v] = true
 
 	fresh := func() mir.VReg { return st.newFresh(f, pool, class) }
+
+	if def, ok := rematerializable(f, sp, v); ok {
+		st.remat(f, v, def, fresh)
+		return
+	}
+	slot := sp.Slot()
 
 	for _, b := range f.Blocks {
 		out := make([]mir.Instr, 0, len(b.Instrs))
@@ -187,4 +202,49 @@ func replace(ops []mir.VReg, v mir.VReg, fresh func() mir.VReg) replaced {
 		out.ops[i] = out.with
 	}
 	return out
+}
+
+// rematerializable is v's one def, when the spiller would rather repeat
+// it than store its result: v is defined exactly once, by an instruction
+// with no operands and one result, and the spiller says so.
+func rematerializable(f *mir.Func, sp Spiller, v mir.VReg) (mir.Instr, bool) {
+	rm, ok := sp.(Rematerializer)
+	if !ok {
+		return mir.Instr{}, false
+	}
+	var def mir.Instr
+	n := 0
+	for _, b := range f.Blocks {
+		for _, in := range b.Instrs {
+			for _, d := range in.Defs {
+				if d == v {
+					def = in
+					n++
+				}
+			}
+		}
+	}
+	if n != 1 || len(def.Uses) != 0 || len(def.Defs) != 1 || !rm.Rematerializable(def) {
+		return mir.Instr{}, false
+	}
+	return def, true
+}
+
+// remat replaces each read of v with a fresh vreg defined by a copy of
+// def just before it. The original def stays and dies at once.
+func (st *spillState) remat(f *mir.Func, v mir.VReg, def mir.Instr, fresh func() mir.VReg) {
+	for _, b := range f.Blocks {
+		out := make([]mir.Instr, 0, len(b.Instrs))
+		for _, in := range b.Instrs {
+			reads := replace(in.Uses, v, fresh)
+			if reads.did {
+				copy := def
+				copy.Defs = []mir.VReg{reads.with}
+				out = append(out, copy)
+				in.Uses = reads.ops
+			}
+			out = append(out, in)
+		}
+		b.Instrs = out
+	}
 }

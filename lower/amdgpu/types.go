@@ -140,14 +140,19 @@ func halfOf(p regalloc.PhysReg, hi bool) reg.Reg {
 
 // pool is the four-class register pool. A function that calls, or is
 // called, leaves the argument VGPRs and the convention's SGPRs alone;
-// see call.go.
-func pool(calling bool) *regalloc.Pool {
+// see call.go. extraSpill VGPRs at the top of the singles are left for
+// spilled scalars past the reserved VGPR's lanes.
+func pool(calling bool, extraSpill int, scratch bool) *regalloc.Pool {
 	var v32s, v64s, s32s, s64s []regalloc.PhysReg
 	vFrom, sTo, pFrom := vgprSinglesFrom, sgprSinglesTo, sgprPairsFrom
 	if calling {
 		vFrom, sTo, pFrom = argVGPRsFirst, retAddrSGPR-1, callPairsFrom
 	}
-	for n := vFrom; n <= vgprSinglesTo; n++ {
+	if scratch {
+		// The first pair holds the private aperture.
+		pFrom += 2
+	}
+	for n := vFrom; n <= vgprSinglesTo-extraSpill; n++ {
 		v32s = append(v32s, physOf(v32, n))
 	}
 	for n := vgprPairsFrom; n <= vgprPairsTo; n += 2 {

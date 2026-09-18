@@ -182,6 +182,8 @@ func (x *fnState) kernelOptions(vgprs, sgprs int) []amdgpuasm.KernelOption {
 
 // fnState is one function's lowering state.
 type fnState struct {
+	extraSpill int // VGPRs past the reserved one holding spilled scalars
+
 	l   *lowerer
 	fn  *ir.Func
 	mf  *mir.Func
