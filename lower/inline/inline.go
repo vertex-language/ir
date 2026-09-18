@@ -141,6 +141,15 @@ type state struct {
 
 // fresh is a label no block of the caller has.
 func (st *state) fresh(base string) string {
+	// A callee's name may hold what a label may not -- a lambda's
+	// mangled closure carries a '$' -- so the label keeps the letters.
+	b := []byte(base)
+	for i, c := range b {
+		if !(c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' && i > 0) {
+			b[i] = '_'
+		}
+	}
+	base = string(b)
 	for {
 		st.n++
 		l := base + "_" + strconv.Itoa(st.n)
