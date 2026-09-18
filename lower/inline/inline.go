@@ -204,7 +204,14 @@ func (st *state) inline(call *ir.Inst, callee *ir.Func) ([]*ir.Inst, error) {
 	for _, b := range order {
 		nb := blocks[b]
 		for _, in := range b.Insts() {
-			out := nb.Clone(in, rename, reblock)
+			// A frame slot of the callee is a frame slot of the caller:
+			// ptr.alloc lives in the entry block, and the copy goes to
+			// the caller's.
+			into := nb
+			if in.Op().Verb == ir.VAlloc {
+				into = f.Entry()
+			}
+			out := into.Clone(in, rename, reblock)
 			if out == nil {
 				return nil, f.Module().Err()
 			}

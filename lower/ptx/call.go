@@ -57,9 +57,9 @@ func (x *fn) call(in *ir.Inst) error {
 		var rp *ptx.Var
 		switch {
 		case sh.single:
-			rp = inner.Local(ptx.Var{Space: ptx.ParamSpace, Type: sh.typ, Name: "_r"})
+			rp = inner.Local(ptx.Var{Space: ptx.ParamSpace, Type: sh.typ, Name: "_cr"})
 		case len(rets) > 1:
-			rp = inner.Local(ptx.Var{Space: ptx.ParamSpace, Type: ptx.B8, Align: sh.align, Len: sh.size, Name: "_r"})
+			rp = inner.Local(ptx.Var{Space: ptx.ParamSpace, Type: ptx.B8, Align: sh.align, Len: sh.size, Name: "_cr"})
 		}
 		if rp != nil {
 			prets = []ptx.Operand{rp}

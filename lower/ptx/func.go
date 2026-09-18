@@ -37,6 +37,20 @@ func (l *lowerer) declareImport(f *ir.FuncImport) error {
 	return nil
 }
 
+// declareProto declares a function's prototype, for a body that names it
+// before its definition.
+func (l *lowerer) declareProto(f *ir.Func) error {
+	pf, err := l.newFunc(f.Name(), f.Signature())
+	if err != nil {
+		return fmt.Errorf("lower: @%s: %w", f.Name(), err)
+	}
+	pf.Linkage = funcLinkage(f)
+	pf.Body = nil
+	pf.NoReturn = f.IsNoReturn()
+	l.pm.Add(pf)
+	return nil
+}
+
 // declareFunc declares a definition ahead of its body, so that bodies may
 // name one another in any order.
 func (l *lowerer) declareFunc(f *ir.Func) error {

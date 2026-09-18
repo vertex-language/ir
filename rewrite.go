@@ -129,6 +129,15 @@ func (b *Block) Clone(in *Inst, def func(*Def) *Def, blk func(*Block) *Block) *I
 	for i, r := range in.results {
 		res[i] = r.typ
 	}
+	// A frame slot may be cloned into a block that already ends: an
+	// inliner hoists a callee's allocs into the caller's entry block,
+	// which was terminated long before, and a slot's place in the
+	// block's order means nothing.
+	if in.op.Verb == VAlloc && b.term != nil {
+		term := b.term
+		b.term = nil
+		defer func() { b.term = term }()
+	}
 	out := b.emit(in.op, res, args, im)
 	if out == nil {
 		return nil

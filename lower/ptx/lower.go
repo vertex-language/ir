@@ -130,6 +130,14 @@ func Lower(m *ir.Module, opts Options) (*ptx.Module, error) {
 	if l.err != nil {
 		return nil, l.err
 	}
+	// A body may call a function defined after it, and PTX wants the
+	// callee's prototype first: one is declared ahead of every body for
+	// each function called from a body that precedes its own.
+	for _, f := range forwardCalled(m) {
+		if err := l.declareProto(f); err != nil {
+			return nil, err
+		}
+	}
 	for _, f := range m.Funcs() {
 		if err := l.declareFunc(f); err != nil {
 			return nil, err
@@ -146,6 +154,29 @@ func Lower(m *ir.Module, opts Options) (*ptx.Module, error) {
 		}
 	}
 	return l.pm, nil
+}
+
+// forwardCalled is the functions called from a body that comes before
+// their own in the module, in module order.
+func forwardCalled(m *ir.Module) []*ir.Func {
+	defined := map[*ir.Func]bool{}
+	needed := map[*ir.Func]bool{}
+	var out []*ir.Func
+	for _, f := range m.Funcs() {
+		defined[f] = true
+		f.WalkInsts(func(in *ir.Inst) bool {
+			if in.Op().Verb != ir.VCall {
+				return true
+			}
+			callee, ok := in.Callee().(*ir.Func)
+			if ok && !defined[callee] && !needed[callee] && callee.Signature().CallConv() != ir.Kernel {
+				needed[callee] = true
+				out = append(out, callee)
+			}
+			return true
+		})
+	}
+	return out
 }
 
 // checkLayout refuses a module whose layout block is not the device's.
