@@ -76,6 +76,18 @@ func (l *lowerer) newKernel(fn *ir.Func) (*kernelPlan, error) {
 		return o
 	}
 	first := true
+	if len(callees(fn)) > 0 || hasCallInd(fn) {
+		// A callee may read any of the ids: ask for all of them.
+		k.wgIDs[1], k.wgIDs[2], k.wiIDs = true, true, 3
+		off = alignUp32(off, 8)
+		first = false
+		for axis := 0; axis < 3; axis++ {
+			k.blockCount[axis] = hidden([...]amdgpuobj.ArgKind{amdgpuobj.HiddenBlockCountX, amdgpuobj.HiddenBlockCountY, amdgpuobj.HiddenBlockCountZ}[axis], 4)
+		}
+		for axis := 0; axis < 3; axis++ {
+			k.groupSize[axis] = hidden([...]amdgpuobj.ArgKind{amdgpuobj.HiddenGroupSizeX, amdgpuobj.HiddenGroupSizeY, amdgpuobj.HiddenGroupSizeZ}[axis], 2)
+		}
+	}
 	fn.WalkInsts(func(in *ir.Inst) bool {
 		axis, _ := in.Axis()
 		switch in.Op().Verb {
@@ -169,10 +181,14 @@ type fnState struct {
 	scratchZero mir.VReg
 
 	// The incoming registers, pinned: the kernarg pointer, the workgroup
-	// ids, the work-item id VGPRs.
-	kernarg mir.VReg
-	wgID    [3]mir.VReg
-	tid     [3]mir.VReg // v0, v1, v2 — or v0 alone when packed
+	// ids, the work-item id VGPRs. A device function has the implicit
+	// registers instead: tid[0] packed, and the sizes and counts.
+	kernarg  mir.VReg
+	wgID     [3]mir.VReg
+	tid      [3]mir.VReg // v0, v1, v2 — or v0 alone when packed
+	wgSize   [3]mir.VReg
+	wgCount  [3]mir.VReg
+	implicit bool
 }
 
 // entry fills the entry block's head: the pinned inputs, the argument
@@ -224,12 +240,14 @@ func (x *fnState) entry(mb *mir.Block) error {
 	if x.calls {
 		// A call passes arguments in v0 upward: the ids leave their
 		// pinned registers now, so no argument's pin collides with
-		// theirs, and SP starts past the kernel's own frame.
+		// theirs; the implicit registers are filled for the callees;
+		// and SP starts past the kernel's own frame.
 		for i := 0; i < n; i++ {
 			t := vr.fresh(v32)
 			emitCopy(c, t, x.tid[i], v32)
 			x.tid[i] = t
 		}
+		x.fillImplicit(c)
 		c.Emit(mir.Instr{Op: spInitOp{}})
 	}
 
@@ -291,7 +309,7 @@ func (x *fnState) workitem(c *cursor, in *ir.Inst) error {
 	axis, _ := in.Axis()
 	switch in.Op().Verb {
 	case ir.VWorkitemID:
-		if x.l.packedIDs() {
+		if x.l.packedIDs() || x.implicit {
 			switch axis {
 			case ir.X:
 				c.Emit(mir.Instr{Op: amdOp{mn: "v_and_b32", ops: []opnd{{kind: oDef}, {kind: oImm, imm: 0x3ff}, {kind: oUse, i: 0}}}, Defs: []mir.VReg{d}, Uses: []mir.VReg{x.tid[0]}})
@@ -306,6 +324,10 @@ func (x *fnState) workitem(c *cursor, in *ir.Inst) error {
 	case ir.VWorkgroupID:
 		c.Emit(mir.Instr{Op: amdOp{mn: "v_mov_b32", ops: []opnd{{kind: oDef}, {kind: oUse, i: 0}}}, Defs: []mir.VReg{d}, Uses: []mir.VReg{x.wgID[axis]}})
 	case ir.VWorkgroupSize:
+		if x.implicit {
+			c.Emit(mir.Instr{Op: amdOp{mn: "v_mov_b32", ops: []opnd{def(0), use(0)}}, Defs: rs(d), Uses: rs(x.wgSize[axis])})
+			return nil
+		}
 		// A halfword hidden argument: a dword load and a mask.
 		off := x.k.groupSize[axis]
 		s := x.vr.fresh(s32)
@@ -318,6 +340,10 @@ func (x *fnState) workitem(c *cursor, in *ir.Inst) error {
 			c.Emit(mir.Instr{Op: amdOp{mn: "v_and_b32", ops: []opnd{{kind: oDef}, {kind: oImm, imm: 0xffff}, {kind: oUse, i: 0}}}, Defs: []mir.VReg{d}, Uses: []mir.VReg{d}})
 		}
 	case ir.VNumWorkgroups:
+		if x.implicit {
+			c.Emit(mir.Instr{Op: amdOp{mn: "v_mov_b32", ops: []opnd{def(0), use(0)}}, Defs: rs(d), Uses: rs(x.wgCount[axis])})
+			return nil
+		}
 		s := x.vr.fresh(s32)
 		c.Emit(mir.Instr{Op: amdOp{mn: "s_load_dword", wait: true, ops: []opnd{{kind: oDef}, {kind: oSMEM, i: 0, imm: x.k.blockCount[axis]}}}, Defs: []mir.VReg{s}, Uses: []mir.VReg{x.kernarg}})
 		c.Emit(mir.Instr{Op: amdOp{mn: "v_mov_b32", ops: []opnd{{kind: oDef}, {kind: oUse, i: 0}}}, Defs: []mir.VReg{d}, Uses: []mir.VReg{s}})

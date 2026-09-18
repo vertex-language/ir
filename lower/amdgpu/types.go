@@ -145,7 +145,7 @@ func pool(calling bool) *regalloc.Pool {
 	var v32s, v64s, s32s, s64s []regalloc.PhysReg
 	vFrom, sTo, pFrom := vgprSinglesFrom, sgprSinglesTo, sgprPairsFrom
 	if calling {
-		vFrom, sTo, pFrom = argVGPRsFirst, retAddrSGPR-1, callTempSGPR+2
+		vFrom, sTo, pFrom = argVGPRsFirst, retAddrSGPR-1, callPairsFrom
 	}
 	for n := vFrom; n <= vgprSinglesTo; n++ {
 		v32s = append(v32s, physOf(v32, n))

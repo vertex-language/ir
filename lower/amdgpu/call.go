@@ -20,9 +20,15 @@ package amdgpu
 //     arguments and results are pinned vregs, and the allocator keeps
 //     everything else out of those registers while they are live.
 //   - The execution mask is the caller's, and is what it was on return.
+//   - The work-item's place in the grid travels implicitly, the way
+//     LLVM passes it: the three work-item ids packed ten bits each in
+//     v31, the workgroup ids in s[36:38], the workgroup sizes in
+//     s[39:41] and the workgroup counts in s[42:44]. A kernel that calls
+//     fills them at entry, whatever it uses itself, and every device
+//     function may read them.
 //
 // A function that calls, and every device function, allocates from a
-// pool that leaves v0..v31 and s30..s35 alone, so a pinned argument
+// pool that leaves v0..v31 and s30..s45 alone, so a pinned argument
 // never overlaps a value the allocator placed.
 //
 // A kernel's private segment is its own frame plus the deepest chain of
@@ -49,6 +55,13 @@ const (
 	sgprSaveVGPR  = 58 // lanes hold the callee's saved SGPRs
 	maxArgDwords  = 32
 	argVGPRsFirst = 32 // the singles a calling function may allocate from
+
+	// The implicit registers.
+	tidVGPR       = 31 // the work-item ids, packed
+	wgIDSGPR      = 36 // s[36:38]
+	wgSizeSGPR    = 39 // s[39:41]
+	wgCountSGPR   = 42 // s[42:44]
+	callPairsFrom = 46 // the SGPR pairs a calling function may allocate from
 )
 
 // A slot is where one argument or result travels.
@@ -124,9 +137,10 @@ type (
 )
 
 // entryDevice fills a device function's entry: parameters out of their
-// pinned VGPRs.
+// pinned VGPRs, and the implicit registers pinned for §W to read.
 func (x *fnState) entryDevice(mb *mir.Block) error {
 	c := x.cursor(mb)
+	x.pinImplicit()
 	slots, err := argSlots(paramTypes(x.fn.Signature()))
 	if err != nil {
 		return err
@@ -146,6 +160,55 @@ func (x *fnState) entryDevice(mb *mir.Block) error {
 		emitCopy(c, v, in, s.w)
 	}
 	return nil
+}
+
+// pinImplicit binds the implicit registers to vregs the §W verbs read.
+func (x *fnState) pinImplicit() {
+	x.tid[0] = x.vr.fresh(v32)
+	x.vr.pin(x.tid[0], physOf(v32, tidVGPR))
+	for axis := 0; axis < 3; axis++ {
+		x.wgID[axis] = x.vr.fresh(s32)
+		x.vr.pin(x.wgID[axis], physOf(s32, wgIDSGPR+axis))
+		x.wgSize[axis] = x.vr.fresh(s32)
+		x.vr.pin(x.wgSize[axis], physOf(s32, wgSizeSGPR+axis))
+		x.wgCount[axis] = x.vr.fresh(s32)
+		x.vr.pin(x.wgCount[axis], physOf(s32, wgCountSGPR+axis))
+	}
+	x.implicit = true
+}
+
+// fillImplicit is the kernel's side: the implicit registers from what
+// the dispatcher handed it, before its first call.
+func (x *fnState) fillImplicit(c *cursor) {
+	tid := x.vr.fresh(v32)
+	x.vr.pin(tid, physOf(v32, tidVGPR))
+	if x.l.packedIDs() {
+		emitCopy(c, tid, x.tid[0], v32)
+	} else {
+		// x | y << 10 | z << 20.
+		t := x.vr.temp(v32)
+		x.emit(c, "v_lshlrev_b32", rs(t), rs(x.tid[1]), def(0), imm(10), use(0))
+		x.emit(c, "v_or_b32", rs(t), rs(x.tid[0], t), def(0), use(0), use(1))
+		x.emit(c, "v_lshlrev_b32", rs(tid), rs(x.tid[2]), def(0), imm(20), use(0))
+		x.emit(c, "v_or_b32", rs(tid), rs(t, tid), def(0), use(0), use(1))
+	}
+	for axis := 0; axis < 3; axis++ {
+		id := x.vr.fresh(s32)
+		x.vr.pin(id, physOf(s32, wgIDSGPR+axis))
+		c.Emit(mir.Instr{Op: amdOp{mn: "s_mov_b32", ops: []opnd{def(0), use(0)}}, Defs: rs(id), Uses: rs(x.wgID[axis])})
+		size := x.vr.fresh(s32)
+		x.vr.pin(size, physOf(s32, wgSizeSGPR+axis))
+		off := x.k.groupSize[axis]
+		c.Emit(mir.Instr{Op: amdOp{mn: "s_load_dword", wait: true, ops: []opnd{def(0), {kind: oSMEM, i: 0, imm: off &^ 3}}}, Defs: rs(size), Uses: rs(x.kernarg)})
+		if off%4 == 2 {
+			c.Emit(mir.Instr{Op: amdOp{mn: "s_lshr_b32", ops: []opnd{def(0), use(0), imm(16)}}, Defs: rs(size), Uses: rs(size)})
+		} else {
+			c.Emit(mir.Instr{Op: amdOp{mn: "s_and_b32", ops: []opnd{def(0), use(0), imm(0xffff)}}, Defs: rs(size), Uses: rs(size)})
+		}
+		count := x.vr.fresh(s32)
+		x.vr.pin(count, physOf(s32, wgCountSGPR+axis))
+		c.Emit(mir.Instr{Op: amdOp{mn: "s_load_dword", wait: true, ops: []opnd{def(0), {kind: oSMEM, i: 0, imm: x.k.blockCount[axis]}}}, Defs: rs(count), Uses: rs(x.kernarg)})
+	}
 }
 
 // ret is a device function's return: results into their pinned VGPRs,

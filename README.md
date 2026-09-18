@@ -381,7 +381,10 @@ else.
     backend's own convention: arguments and results in `v0` upward, the
     return address in `s[30:31]` from `s_swappc_b64`, `s32`/`s33` the
     stack and frame pointers on the private segment, and a callee that
-    saves every register it touches. A kernel's private segment is its
+    saves every register it touches. The work-item's place in the grid
+    travels implicitly, as LLVM passes it: the ids packed in `v31`, the
+    workgroup ids, sizes and counts in `s[36:44]`, which a kernel that
+    calls fills at entry. A kernel's private segment is its
     own frame plus the deepest chain of frames beneath it, so recursion
     is refused, as is an argument list past thirty-two dwords. A
     function pointer that differs across the wave is a waterfall loop:

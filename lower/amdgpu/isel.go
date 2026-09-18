@@ -326,12 +326,7 @@ func (x *fnState) selectInst(c *cursor, in *ir.Inst) error {
 		return x.bulk(c, in)
 
 	// —— §W ——
-	case ir.VWorkitemID, ir.VWorkgroupID, ir.VWorkgroupSize, ir.VNumWorkgroups:
-		if x.device {
-			return fmt.Errorf("a device function has no work-item ids; the kernel's arrive in registers a call does not pass, so the function is inlined or told its id")
-		}
-		return x.workitem(c, in)
-	case ir.VLaneID, ir.VWaveSize:
+	case ir.VWorkitemID, ir.VWorkgroupID, ir.VWorkgroupSize, ir.VNumWorkgroups, ir.VLaneID, ir.VWaveSize:
 		return x.workitem(c, in)
 	case ir.VWaveShflIdx, ir.VWaveShflUp, ir.VWaveShflDown, ir.VWaveShflXor,
 		ir.VWaveReadFirstLane, ir.VWaveBallot, ir.VWaveAny, ir.VWaveAll:

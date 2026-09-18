@@ -158,3 +158,41 @@ func TestFunctionTable(t *testing.T) {
 	}
 	lowers(t, m, feature.GFX942, "s_swappc_b64")
 }
+
+// A device function reads its place in the grid from the implicit
+// registers a calling kernel fills.
+func TestImplicitIDs(t *testing.T) {
+	m := ir.NewModule("imp", ir.AMDGCN)
+	gid := m.Func("gid").Export().ReturnsI32().NoUnwind()
+	ge := gid.Entry()
+	ge.Return(ge.I32.Add(ge.I32.Mul(ge.I32.WorkgroupID(ir.Y), ge.I32.WorkgroupSize(ir.X)), ge.I32.WorkitemID(ir.Z)))
+	fT := m.FuncType("gid_t", ir.NewSig().Ret(ir.TypeI32))
+
+	k := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+	p := k.ParamPtr("p")
+	e := k.Entry()
+	r := e.CallInd(e.Ptr.GetAddr(gid), fT).I32(0)
+	e.I32.Store(e.I32.Add(r, e.I32.NumWorkgroups(ir.X)), p)
+	e.Return()
+	for _, c := range []struct {
+		asic  feature.ASIC
+		wants []string
+	}{
+		// gfx942 packs the ids in v0 and has no scratch SGPRs before the
+		// workgroup ids; gfx900 packs them itself, after flat scratch init.
+		{feature.GFX942, []string{"s_mov_b32 s36, s2", "v_mov_b32_e32 v31, v"}},
+		{feature.GFX900, []string{"s_mov_b32 s36, s4", "v_or_b32_e32 v31, v"}},
+	} {
+		asic := c.asic
+		o := lowerObj(t, m, lower.Options{ASIC: asic})
+		kd := o.KernelDescriptors()[0]
+		// Both extra workgroup ids and all three work-item ids are asked for.
+		if kd.ComputePgmRsrc2&(3<<8) != 3<<8 || (kd.ComputePgmRsrc2>>11)&3 != 2 {
+			t.Errorf("%s: rsrc2 = %#x", asic, kd.ComputePgmRsrc2)
+		}
+		if len(kd.Args) != 7 {
+			t.Errorf("%s: %d kernel arguments, want the pointer and six hidden ones", asic, len(kd.Args))
+		}
+		lowers(t, m, asic, append(c.wants, "20, v31", "v_mov_b32_e32 v32, s37", "v_mov_b32_e32 v33, s39")...)
+	}
+}
