@@ -315,7 +315,7 @@ else.
 | §G · §G2 calls, terminators, computed branches | all but `tail_call` ¹⁶ | ✅ | all but `tail_call` ¹⁶ | all but `brind`, `tail_call` ⁷ | all but `brind`, `tail_call` ¹⁴ |
 | §G3 unwinding — `invoke`, `invokeind`, `resume` | — | Mach-O | — | — ⁸ | — ⁸ |
 | §G4 inline assembly | — | — | — | `asm`; not `asm goto` | `asm`; not `asm goto` ¹⁵ |
-| §H atomics | ✅ | ✅ | ✅ | ✅ with scopes ⁹; not the narrow forms | ✅ with scopes ¹²; not the narrow forms |
+| §H atomics | ✅ | ✅ | ✅ | ✅ with scopes ⁹; not the narrow forms | ✅ with scopes ¹² |
 | §I variadics | ✅ ¹ | Apple's variant only ² | ✅ | — ⁸ | — ⁸ |
 | §W work-items, `barrier`, `shared`, the wave verbs | — | — | — | ✅ | ✅ ¹³ |
 | ext-float | `f128` ✅, `f80` — ³ | `f128` — ⁴ | `f80` — ³ | neither ⁸ | neither ⁸ |
@@ -366,9 +366,11 @@ else.
     `buffer_wbinvl1_vol` on GFX9, `buffer_wbl2`/`buffer_invl2` at system
     scope on gfx90a, and gfx940's `sc0`/`sc1` bits with `buffer_wbl2`
     and `buffer_inv`. An access whose pointer provably came from a
-    `shared` global is a `ds_*` instruction; the rest is flat. An `f32`
-    atomic add through a flat pointer needs gfx940; below it LLVM spins
-    a compare-and-swap, which is not written here yet.
+    `shared` global is a `ds_*` instruction; the rest is flat. A narrow
+    read-modify-write or compare-and-swap is a compare-and-swap loop on
+    the containing dword. An `f32` atomic add through a flat pointer
+    needs gfx940; below it LLVM spins a compare-and-swap, which is not
+    written here yet.
 13. A shuffle is `ds_bpermute_b32`. The wave verbs' `mask` operand names
     the participating lanes; on this hardware every active lane
     participates, and the mask narrows a ballot only on a 32-wide wave,

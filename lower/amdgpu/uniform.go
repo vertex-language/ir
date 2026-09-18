@@ -142,6 +142,11 @@ func (u *uniformity) needsStructure(f *ir.Func) bool {
 					divergent = true
 				}
 			}
+		case ir.VAtomicCas8, ir.VAtomicCas16,
+			ir.VAtomicRmwAdd8, ir.VAtomicRmwSub8, ir.VAtomicRmwAnd8, ir.VAtomicRmwOr8, ir.VAtomicRmwXor8, ir.VAtomicRmwXchg8,
+			ir.VAtomicRmwAdd16, ir.VAtomicRmwSub16, ir.VAtomicRmwAnd16, ir.VAtomicRmwOr16, ir.VAtomicRmwXor16, ir.VAtomicRmwXchg16:
+			// A compare-and-swap loop leaves lane by lane.
+			divergent = true
 		}
 		return !divergent
 	})

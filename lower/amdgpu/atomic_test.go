@@ -254,3 +254,22 @@ func TestSpillMasks(t *testing.T) {
 		}
 	}
 }
+
+// Narrow atomics: a byte add is a compare-and-swap loop on the
+// containing dword, a byte load and store are the byte instructions.
+func TestNarrowAtomics(t *testing.T) {
+	m := ir.NewModule("na", ir.AMDGCN)
+	fn := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+	p := fn.ParamPtr("p")
+	e := fn.Entry()
+	tid := e.I32.WorkitemID(ir.X)
+	q := e.Ptr.Add(p, e.I64.ZExtI32(e.I32.And(tid, e.I32.Const(7))))
+	old := e.I32.AtomicRmwAdd8(e.I32.Const(3), q, ir.Monotonic, ir.DeviceScope)
+	was := e.I32.AtomicCas16(old, e.I32.Const(9), p, ir.AcqRel, ir.Monotonic)
+	b := e.I32.AtomicULoad8(q, ir.Acquire, ir.DeviceScope)
+	e.I32.AtomicStore8(e.I32.Add(e.I32.Add(old, was), b), q, ir.Release, ir.DeviceScope)
+	e.Return()
+	lowers(t, m, feature.GFX942,
+		"v_and_b32_e32 v", "-4", "flat_atomic_cmpswap v", "v_cmp_ne_u32_e64 s", "s_cbranch_execz",
+		"flat_load_ubyte", "flat_store_byte", "buffer_wbl2 sc1")
+}
