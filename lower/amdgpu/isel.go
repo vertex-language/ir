@@ -363,6 +363,8 @@ func (x *fnState) selectBare(c *cursor, in *ir.Inst) error {
 		return x.call(c, in)
 	case ir.VMemCpy, ir.VMemMove, ir.VMemSet, ir.VMemCmp:
 		return x.bulk(c, in)
+	case ir.VAsm:
+		return x.asmInst(c, in)
 	}
 	return fmt.Errorf("not lowered")
 }

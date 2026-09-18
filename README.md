@@ -314,7 +314,7 @@ else.
 | §F select | ✅ | ✅ | ✅ | ✅ | ✅ |
 | §G · §G2 calls, terminators, computed branches | ✅ | ✅ | ✅ | all but `brind` ⁷ | all but `brind` ¹⁴ |
 | §G3 unwinding — `invoke`, `invokeind`, `resume` | — | Mach-O | — | — ⁸ | — ⁸ |
-| §G4 inline assembly | — | — | — | `asm`; not `asm goto` | — |
+| §G4 inline assembly | — | — | — | `asm`; not `asm goto` | `asm`; not `asm goto` ¹⁵ |
 | §H atomics | ✅ | ✅ | ✅ | ✅ with scopes ⁹; not the narrow forms | ✅ with scopes ¹²; not the narrow forms |
 | §I variadics | ✅ ¹ | Apple's variant only ² | ✅ | — ⁸ | — ⁸ |
 | §W work-items, `barrier`, `shared`, the wave verbs | — | — | — | ✅ | ✅ ¹³ |
@@ -383,6 +383,12 @@ else.
     is refused, as is a function pointer that differs across the wave
     and an argument list past thirty-two dwords. A call to an import
     needs a dynamic relocation the code object writer does not emit.
+15. The template goes through the `amdgpu` repo's assembler with each
+    `%N` the operand's register. Constraint `v` (or `reg`) is the value's
+    own register — a VGPR, or an SGPR pair for an `i1` — and `s` reads
+    the value into an SGPR from the first active lane first. Clobbers
+    may name `vcc`, `m0`, `scc`, `exec`, `cc` and `memory`; a register
+    the allocator hands out cannot be reserved and is refused.
 4. `f128` on amd64 is compiler-rt — §0 is explicit that a namespace the
    layout admits is usable whether or not silicon implements it, and
    that lowering supplies the call. Its §A3 rows are the arithmetic and

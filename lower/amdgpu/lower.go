@@ -38,6 +38,7 @@
 //     copies and byte loops, and br_table as an if-chain (bulk.go).
 //   - 36, calls. A device convention of the backend's own, for what
 //     the inliner leaves; see call.go.
+//   - 37, asm, through the amdgpu repo's assembler; see asm.go.
 //
 // # What is different about this target
 //

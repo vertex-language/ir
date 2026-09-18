@@ -256,6 +256,8 @@ func (e *emitter) instr(in mir.Instr, next string) error {
 		} else {
 			e.text.Emit("s_endpgm")
 		}
+	case asmOp:
+		return e.asmEmit(op, in)
 	case callResultsOp:
 	case spInitOp:
 		e.text.Emit("s_mov_b32", reg.SGPR(spSGPR), immediate(int64(e.x.frame.size())))

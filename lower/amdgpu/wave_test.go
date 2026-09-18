@@ -99,3 +99,18 @@ func TestBrTable(t *testing.T) {
 	out.Return()
 	lowers(t, m, feature.GFX942, "v_cmp_eq_u32_e64 s", "s_cbranch_execz", "flat_store_dword")
 }
+
+// Inline assembly: a vector instruction on the operands' own registers,
+// and a scalar one on a value read into an SGPR for it.
+func TestAsm(t *testing.T) {
+	m := ir.NewModule("asm", ir.AMDGCN)
+	fn := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+	p := fn.ParamPtr("p")
+	e := fn.Entry()
+	tid := e.I32.WorkitemID(ir.X)
+	a := e.Asm("v_add_u32 %0, %1, %2").Out(ir.TypeI32, ir.CStr("v")).In(tid, ir.CStr("v")).In(e.I32.Const(5), ir.CStr("v")).Clobber("vcc").Emit().I32(0)
+	b := e.Asm("s_lshl_b32 %0, %1, 2").Out(ir.TypeI32, ir.CStr("s")).In(a, ir.CStr("s")).Emit().I32(0)
+	e.I32.Store(e.I32.Add(a, b), p)
+	e.Return()
+	lowers(t, m, feature.GFX942, "v_add_u32_e32 v", "v_readfirstlane_b32 s", "s_lshl_b32 s", ", 2")
+}
