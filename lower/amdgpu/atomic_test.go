@@ -273,3 +273,16 @@ func TestNarrowAtomics(t *testing.T) {
 		"v_and_b32_e32 v", "-4", "flat_atomic_cmpswap v", "v_cmp_ne_u32_e64 s", "s_cbranch_execz",
 		"flat_load_ubyte", "flat_store_byte", "buffer_wbl2 sc1")
 }
+
+// A float atomic add on a generation with no instruction for it is a
+// compare-and-swap loop.
+func TestFloatAddLoop(t *testing.T) {
+	m := ir.NewModule("fa", ir.AMDGCN)
+	fn := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+	p := fn.ParamPtr("p")
+	e := fn.Entry()
+	e.F32.AtomicRmwAdd(e.F32.Const(1), p, ir.Monotonic, ir.DeviceScope)
+	e.Return()
+	lowers(t, m, feature.GFX900, "v_add_f32_e32", "flat_atomic_cmpswap v", "v_cmp_ne_u32_e64", "s_cbranch_execz")
+	lowers(t, m, feature.GFX942, "flat_atomic_add_f32")
+}

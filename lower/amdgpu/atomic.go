@@ -341,12 +341,16 @@ func (x *fnState) rmw(c *cursor, in *ir.Inst, d mir.VReg, a []mir.VReg, wide boo
 		switch t {
 		case ir.TypeF32:
 			if x.l.model() != modelGFX940 {
-				return fmt.Errorf("an f32 atomic add through a flat pointer is flat_atomic_add_f32, which needs gfx940; before it LLVM spins a compare-and-swap, which is not lowered yet")
+				// No flat_atomic_add_f32 before gfx940: the sum goes in
+				// by compare-and-swap, as LLVM spins it.
+				x.floatAddLoop(c, d, p, v, false, in.Scope())
+				return nil
 			}
 			mn = "flat_atomic_add_f32"
 		case ir.TypeF64:
 			if x.l.model() == modelGFX9 {
-				return fmt.Errorf("an f64 atomic add needs gfx90a")
+				x.floatAddLoop(c, d, p, v, true, in.Scope())
+				return nil
 			}
 			mn = "flat_atomic_add_f64"
 		default:
@@ -572,4 +576,47 @@ func (x *fnState) narrow(c *cursor, in *ir.Inst, a []mir.VReg, bits int, o ir.Or
 	x.emit(c, "v_lshrrev_b32", rs(d), rs(shift, old), def(0), use(0), use(1))
 	x.emit(c, "v_and_b32", rs(d), rs(d, fieldMask), def(0), use(0), use(1))
 	return nil
+}
+
+// floatAddLoop is a float atomic add on a generation with no instruction
+// for it: read the value, add, and compare-and-swap the sum in until the
+// value read back is the one the sum was computed from. The loop leaves
+// lane by lane, so the function is structurized.
+func (x *fnState) floatAddLoop(c *cursor, d, p, v mir.VReg, wide bool, s ir.Scope) {
+	w := v32
+	load, add := "flat_load_dword", "v_add_f32"
+	if wide {
+		w, load, add = v64, "flat_load_dwordx2", "v_add_f64"
+	}
+	old := x.vr.temp(w)
+	x.emitMem(c, load, rs(old), rs(p), def(0), flat(0))
+	head, done := c.open("fadd"), c.open("fadded")
+	c.Emit(mir.Instr{Op: branchOp{target: head.Label}})
+	c.mf.Succ(c.blk, head.Label)
+	c.blk = head
+	sum, got := x.vr.temp(w), x.vr.temp(w)
+	x.emit(c, add, rs(sum), rs(old, v), def(0), use(0), use(1))
+	if !wide {
+		x.emit(c, "v_mov_b32", nil, rs(sum), fixedV(casScratch), use(0))
+		x.emit(c, "v_mov_b32", nil, rs(old), fixedV(casScratch+1), use(0))
+		x.emitMem(c, "flat_atomic_cmpswap", rs(got), rs(p), def(0), x.rmwAddr(0, s), fixedTuple(casScratch, 2))
+	} else {
+		x.emit(c, "v_mov_b32", nil, rs(sum), fixedV(casScratch), useLo(0))
+		x.emit(c, "v_mov_b32", nil, rs(sum), fixedV(casScratch+1), useHi(0))
+		x.emit(c, "v_mov_b32", nil, rs(old), fixedV(casScratch+2), useLo(0))
+		x.emit(c, "v_mov_b32", nil, rs(old), fixedV(casScratch+3), useHi(0))
+		x.emitMem(c, "flat_atomic_cmpswap_x2", rs(got), rs(p), def(0), x.rmwAddr(0, s), fixedTuple(casScratch, 4))
+	}
+	changed := x.vr.temp(s64)
+	if wide {
+		x.emit(c, "v_cmp_ne_u64", rs(changed), rs(got, old), def(0), use(0), use(1))
+	} else {
+		x.emit(c, "v_cmp_ne_u32", rs(changed), rs(got, old), def(0), use(0), use(1))
+	}
+	emitCopy(c, old, got, w)
+	c.Emit(mir.Instr{Op: cbranchOp{then: head.Label, els: done.Label}, Uses: rs(changed)})
+	c.mf.Succ(c.blk, head.Label)
+	c.mf.Succ(c.blk, done.Label)
+	c.blk = done
+	emitCopy(c, d, old, w)
 }

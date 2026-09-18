@@ -368,9 +368,9 @@ else.
     and `buffer_inv`. An access whose pointer provably came from a
     `shared` global is a `ds_*` instruction; the rest is flat. A narrow
     read-modify-write or compare-and-swap is a compare-and-swap loop on
-    the containing dword. An `f32` atomic add through a flat pointer
-    needs gfx940; below it LLVM spins a compare-and-swap, which is not
-    written here yet.
+    the containing dword, and so is a float atomic add on a generation
+    with no instruction for it — `f32` through a flat pointer before
+    gfx940, `f64` before gfx90a.
 13. A shuffle is `ds_bpermute_b32`. The wave verbs' `mask` operand names
     the participating lanes; on this hardware every active lane
     participates, and the mask narrows a ballot only on a 32-wide wave,

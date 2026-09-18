@@ -22,10 +22,11 @@ import "github.com/vertex-language/ir"
 
 type uniformity struct {
 	uniform map[*ir.Def]bool
+	model   memModel // which atomics have instructions, for needsStructure
 }
 
-func analyzeUniformity(f *ir.Func) *uniformity {
-	u := &uniformity{uniform: map[*ir.Def]bool{}}
+func analyzeUniformity(f *ir.Func, model memModel) *uniformity {
+	u := &uniformity{uniform: map[*ir.Def]bool{}, model: model}
 	for _, p := range f.Params() {
 		u.uniform[p] = true
 	}
@@ -147,8 +148,26 @@ func (u *uniformity) needsStructure(f *ir.Func) bool {
 			ir.VAtomicRmwAdd16, ir.VAtomicRmwSub16, ir.VAtomicRmwAnd16, ir.VAtomicRmwOr16, ir.VAtomicRmwXor16, ir.VAtomicRmwXchg16:
 			// A compare-and-swap loop leaves lane by lane.
 			divergent = true
+		case ir.VAtomicRmwAdd:
+			// A float add is one too, on a generation with no instruction.
+			if in.Op().Type.IsFloat() && !u.floatAtomicAddNative(in) {
+				divergent = true
+			}
 		}
 		return !divergent
 	})
 	return divergent
+}
+
+// floatAtomicAddNative reports whether the target has an instruction
+// for this float atomic add: always on workgroup storage, and on a
+// flat pointer where the generation has one.
+func (u *uniformity) floatAtomicAddNative(in *ir.Inst) bool {
+	if sharedPtr(in.Arg(1)) {
+		return true
+	}
+	if in.Op().Type == ir.TypeF64 {
+		return u.model != modelGFX9
+	}
+	return u.model == modelGFX940
 }

@@ -281,7 +281,7 @@ func (l *lowerer) lowerFunc(fn *ir.Func) error {
 // lowerFuncWith selects, allocates and emits one kernel, with or without
 // a private segment.
 func (l *lowerer) lowerFuncWith(fn *ir.Func, fr *frame, scratch bool) error {
-	uni := analyzeUniformity(fn)
+	uni := analyzeUniformity(fn, l.model())
 	mf := mir.NewFunc()
 	device := !isKernel(fn)
 	calls := len(callees(fn)) > 0 || hasCallInd(fn)
