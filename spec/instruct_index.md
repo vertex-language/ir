@@ -496,6 +496,8 @@ Absent an explicit `callconv`, a signature's convention is `ccc`, which is the
 | `brind` | `ptr, [@label, ...]` | — targets take no parameters |
 | `return` | `%register, ...`? | — one per `ret-item` |
 | `trap` | — | — |
+| `tail_call` | `@func(args...)` | — the callee's results are this function's |
+| `tail_callind` | `ptr : @Type(args...)` | — per the named function type |
 
 `br_table`'s selector is `i32` and indexes the table from zero; an out-of-range
 selector takes the default edge. A `switch` on a wider or offset type is a
@@ -503,6 +505,17 @@ frontend-emitted subtract and range check — work the frontend already does to
 find the default edge.
 
 The entry block is not a target of any of these; see the grammar, §19.17.
+
+**A tail call is a return whose value another function computes.** It
+replaces this frame with the callee's rather than building one on top: the
+frame comes down, the arguments are placed, and control branches, so the
+callee returns to this function's caller and never here — which is why it
+is a terminator and takes no result list. It is a guarantee, not an
+optimisation: Swift's async functions are a chain of them, and a chain that
+consumed a frame each time would be a recursion as long as the program's
+waiting. The callee's signature returns exactly what this function returns,
+in arity and type (grammar §19.22). A `tail_callind` names its function
+type the way `callind` does.
 
 There is no `unreachable`; see §L.
 
@@ -869,7 +882,6 @@ function call.
 | Wider extended floats | A new `ext-float` member, admitted by the `layout` block. |
 | Function memory effects | New function placements (`readnone`, `readonly`, `argmemonly`). |
 | Pointer parameter facts | New parameter attributes (`nonnull`, `dereferenceable`, `align`). |
-| Tail calls | A modifier on `call`. |
 | Half floats | `f16` and `bf16` as namespaces the `layout` block admits, under the same rule as `ext-float`; each pays §C's conversion cost. |
 | Dynamic workgroup storage | An unsized `shared` import and an `i32.dynamic_shared_size` row in §W1. |
 | Address-space attributes | A `space` `mem-attr` naming where an access resolves, for a lowering that can prove nothing from the pointer. |
@@ -953,6 +965,13 @@ relocation records admit and no more.
 
 | § | change |
 | --- | --- |
+| G2 | `tail_call` and `tail_callind`, terminators; their contract stated |
+| K | tail calls struck (landed as terminators rather than a modifier) |
+
+### Changes from the revision before that
+
+| § | change |
+| --- | --- |
 | head | §W added to the section list |
 | 0 | sync scopes and work-items stated as global rules |
 | A3 | the approximate six, with their contract |
@@ -961,7 +980,7 @@ relocation records admit and no more.
 | K | atomic min/max and named scopes struck (landed); half floats, dynamic workgroup storage, address-space attributes added |
 | L | float atomic min/max, pointer address spaces |
 
-### Changes from the revision before that
+### Changes from the revision two before that
 
 | § | change |
 | --- | --- |

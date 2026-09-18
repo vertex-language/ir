@@ -312,7 +312,7 @@ else.
 | §D3 pointer ops | all but `tlsaddr` | all but `tlsaddr` | all but `tlsaddr` | `alloc`, `alloca`, `getaddr`, `diff`, stack save/restore ⁶ | `alloc`, `getaddr`, `diff` ¹¹ |
 | §E bulk memory | ✅ non-`volatile` | ✅ non-`volatile` | ✅ non-`volatile` | ✅ as byte loops | ✅ as byte loops |
 | §F select | ✅ | ✅ | ✅ | ✅ | ✅ |
-| §G · §G2 calls, terminators, computed branches | ✅ | ✅ | ✅ | all but `brind` ⁷ | all but `brind` ¹⁴ |
+| §G · §G2 calls, terminators, computed branches | all but `tail_call` ¹⁶ | ✅ | all but `tail_call` ¹⁶ | all but `brind`, `tail_call` ⁷ | all but `brind`, `tail_call` ¹⁴ |
 | §G3 unwinding — `invoke`, `invokeind`, `resume` | — | Mach-O | — | — ⁸ | — ⁸ |
 | §G4 inline assembly | — | — | — | `asm`; not `asm goto` | `asm`; not `asm goto` ¹⁵ |
 | §H atomics | ✅ | ✅ | ✅ | ✅ with scopes ⁹; not the narrow forms | ✅ with scopes ¹²; not the narrow forms |
@@ -389,6 +389,10 @@ else.
     the value into an SGPR from the first active lane first. Clobbers
     may name `vcc`, `m0`, `scc`, `exec`, `cc` and `memory`; a register
     the allocator hands out cannot be reserved and is refused.
+16. `tail_call` and `tail_callind` are lowered on arm64, where Swift's
+    async functions need them; the other backends refuse them by name
+    rather than lower them as a call and a return, which is not the
+    guarantee the verb makes.
 4. `f128` on amd64 is compiler-rt — §0 is explicit that a namespace the
    layout admits is usable whether or not silicon implements it, and
    that lowering supplies the call. Its §A3 rows are the arithmetic and

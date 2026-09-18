@@ -115,6 +115,8 @@ func (x *fnState) selectTerm(c *cursor, in *ir.Inst) error {
 		return fmt.Errorf("brind has no lowering on a target that branches the whole wave")
 	case ir.VInvoke, ir.VInvokeInd, ir.VResume:
 		return fmt.Errorf("there is no unwinding on the device")
+	case ir.VTailCall, ir.VTailCallInd:
+		return fmt.Errorf("a tail call replaces the frame, which the device convention's callee-saves-all frame cannot do yet; it is refused rather than lowered as a call and a return")
 	default:
 		return fmt.Errorf("not lowered")
 	}

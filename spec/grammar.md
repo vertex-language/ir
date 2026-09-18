@@ -295,16 +295,28 @@ def-param          ::= register reg-type param-attr*
 abs-param          ::= register? reg-type param-attr*
 param-attr         ::= "byval" TypeName | "sret" TypeName
                      | "zext" | "sext" | "noalias"
+                     | "swiftself" | "swiftasync" | "swiftindirect"
 
 ret                ::= reg-type ret-attr*
                      | "(" ret-item ( "," ret-item )* ")"
 ret-item           ::= reg-type ret-attr*
-ret-attr           ::= "zext" | "sext"
+ret-attr           ::= "zext" | "sext" | "swifterror"
 
 callconv           ::= "ccc" | "fastcc" | "preserve_most" | "preserve_all"
                      | "stdcall" | "fastcall" | "thiscall" | "vectorcall"
                      | "ms_abi"  | "sysv_abi" | "kernel"
 ```
+
+**The Swift attributes name registers the convention reserves.** `swiftself`
+marks the parameter that travels in the self register, `swiftasync` the one
+carrying an async function's context, and `swiftindirect` the one carrying
+the address of a result returned indirectly by declaration rather than by
+size; `swifterror`, on a `ptr` result, marks the value that travels out in
+the error register, which the caller clears before the call and reads after
+it. Each is a statement rather than a hint: the two sides of a call have to
+agree on a register the base convention does not name, and the signature is
+the only place they can. On AArch64 they are X20, X22, X8 and X21, which is
+what swiftc emits.
 
 **`kernel` is a GPU entry point** — the function a host launches over a grid
 of work-items (§W). It is a calling convention because it is one: the
@@ -648,7 +660,9 @@ arg-list      ::= register ( "," register )*
 ```
 
 `invoke` and `invokeind` (§14) have no `result-list`. Their results arrive as
-parameters of the normal target block; see §7 and §19.16.
+parameters of the normal target block; see §7 and §19.16. `tail_call` and
+`tail_callind` (§14) have none either: the callee's results are this
+function's, handed straight back.
 
 ## 14. Terminators
 
@@ -659,6 +673,8 @@ terminator   ::= ( "br" target
                  | "brind" register "," "[" label-list "]"
                  | "return" ( register ( "," register )* )?
                  | "trap"
+                 | "tail_call" FuncName "(" arg-list? ")"
+                 | "tail_callind" register ":" TypeName "(" arg-list? ")"
                  | "invoke" FuncName "(" arg-list? ")"
                    "to" target "unwind" Label
                  | "invokeind" register ":" TypeName "(" arg-list? ")"
@@ -756,7 +772,7 @@ bare set, for reference:
 
 ```text
 br  brif  br_table  brind  return  trap  resume
-call  callind  invoke  invokeind
+call  callind  invoke  invokeind  tail_call  tail_callind
 asm
 fence  barrier
 memcpy  memmove  memset  memcmp
@@ -776,7 +792,6 @@ None of the following requires a grammar change beyond the noted production.
 | Sub-word / pointer atomic coverage | New `rmw-verb` and `cas-verb` rows; no production shape changes. |
 | Function memory effects | `func-placement` and `import-placement` gain members (`readnone`, `readonly`, `argmemonly`). |
 | Pointer parameter facts | `param-attr` gains members (`nonnull`, `dereferenceable`, `align`). |
-| Tail calls | `inst-call` gains a `"tail"?`. |
 | Half floats | `reg-type` and `store-type` gain `f16` / `bf16`; `layout` gains an attribute admitting them. |
 | Dynamic workgroup storage | An `import-decl` of a `shared` global with `[0]` length; `workitem-verb` gains `dynamic_shared_size`. |
 | Address-space attributes | `mem-attr` gains `"space" ident`. |
@@ -854,3 +869,10 @@ The grammar admits these; a verifier rejects them.
     nothing on the device can reach it.
 21. A `shared` global's initializer is `zeroed`. Workgroup storage begins
     when the workgroup does and nothing can fill it sooner.
+22. A `tail_call`'s callee — the named function for `tail_call`, the named
+    function type for `tail_callind` — returns what the enclosing function
+    returns: the same number of results, each of the same register type.
+    The callee returns to this function's caller, so its results are this
+    function's, and a mismatch is a value handed back in the wrong place.
+23. `swifterror` is a result attribute, on a `ptr` result only; `swiftself`,
+    `swiftasync` and `swiftindirect` are parameter attributes.

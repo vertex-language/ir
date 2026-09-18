@@ -59,6 +59,8 @@ func (x *fn) term(in *ir.Inst) error {
 		return fmt.Errorf("brind has no PTX equivalent; brx.idx wants an index, not an address")
 	case ir.VInvoke, ir.VInvokeInd, ir.VResume:
 		return fmt.Errorf("there is no unwinding on the device")
+	case ir.VTailCall, ir.VTailCallInd:
+		return fmt.Errorf("PTX has no tail call; a call and a return would not keep the frame guarantee the verb makes")
 	case ir.VAsmGoto:
 		return fmt.Errorf("asm goto is not lowered; PTX has no label operand to substitute")
 	default:
