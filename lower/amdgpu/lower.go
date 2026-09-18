@@ -34,6 +34,8 @@
 //     aperture, the allocator spills VGPRs to scratch slots and SGPRs to
 //     lanes of a reserved VGPR, and a function that turns out to need
 //     scratch is selected again with it; see scratch.go.
+//   - The rest of the table: the wave verbs (wave.go), §E as unrolled
+//     copies and byte loops, and br_table as an if-chain (bulk.go).
 //
 // # What is different about this target
 //
@@ -225,7 +227,7 @@ func (l *lowerer) lowerFuncWith(fn *ir.Func, fr *frame, scratch bool) error {
 	if err != nil {
 		return err
 	}
-	x := &fnState{l: l, fn: fn, mf: mf, vr: vr, uni: uni, k: k, divergent: uni.anyDivergentBranch(fn), scratch: scratch, frame: fr}
+	x := &fnState{l: l, fn: fn, mf: mf, vr: vr, uni: uni, k: k, divergent: uni.needsStructure(fn), scratch: scratch, frame: fr}
 	if err := x.entry(mbs[0]); err != nil {
 		return fmt.Errorf("lower: @%s: %w", fn.Name(), err)
 	}

@@ -310,14 +310,14 @@ else.
 | §C–§C4 conversions | ✅ | ✅ | ✅ | ✅ | ✅ |
 | §D · §D2 memory, sub-width memory | ✅ | ✅ | ✅ | ✅ natural alignment ⁵ | ✅ natural alignment ⁵ |
 | §D3 pointer ops | all but `tlsaddr` | all but `tlsaddr` | all but `tlsaddr` | `alloc`, `alloca`, `getaddr`, `diff`, stack save/restore ⁶ | `alloc`, `getaddr`, `diff` ¹¹ |
-| §E bulk memory | ✅ non-`volatile` | ✅ non-`volatile` | ✅ non-`volatile` | ✅ as byte loops | — ¹¹ |
+| §E bulk memory | ✅ non-`volatile` | ✅ non-`volatile` | ✅ non-`volatile` | ✅ as byte loops | ✅ as byte loops |
 | §F select | ✅ | ✅ | ✅ | ✅ | ✅ |
-| §G · §G2 calls, terminators, computed branches | ✅ | ✅ | ✅ | all but `brind` ⁷ | `br`, `brif`, `return`, `trap`; calls inlined; not `br_table`, `brind` ¹¹ |
+| §G · §G2 calls, terminators, computed branches | ✅ | ✅ | ✅ | all but `brind` ⁷ | all but `brind`; calls inlined ¹¹ |
 | §G3 unwinding — `invoke`, `invokeind`, `resume` | — | Mach-O | — | — ⁸ | — ⁸ |
 | §G4 inline assembly | — | — | — | `asm`; not `asm goto` | — |
 | §H atomics | ✅ | ✅ | ✅ | ✅ with scopes ⁹; not the narrow forms | ✅ with scopes ¹²; not the narrow forms |
 | §I variadics | ✅ ¹ | Apple's variant only ² | ✅ | — ⁸ | — ⁸ |
-| §W work-items, `barrier`, `shared`, the wave verbs | — | — | — | ✅ | the ids, `barrier`, `shared`; not the wave verbs ¹¹ |
+| §W work-items, `barrier`, `shared`, the wave verbs | — | — | — | ✅ | ✅ ¹³ |
 | ext-float | `f128` ✅, `f80` — ³ | `f128` — ⁴ | `f80` — ³ | neither ⁸ | neither ⁸ |
 
 1. Except `ptr.va_arg_ref` of an aggregate small enough to have been
@@ -355,10 +355,11 @@ else.
     `exec` to the lanes whose predicate is set. `ptr.alloc` is a flat
     pointer into the private segment and the allocator spills to it —
     VGPRs to scratch slots, SGPRs to lanes of a reserved VGPR — up to a
-    4 KB frame, which is what a scratch offset reaches. Bulk memory,
-    the wave verbs, a dynamic `alloca` and the device calling
-    convention are still in the queue. A per-lane trap condition is a
-    mask tested against `exec` and one scalar branch.
+    4 KB frame, which is what a scratch offset reaches. `br_table` is
+    an if-chain and §E is unrolled to sixty-four bytes and a byte loop
+    past that. A dynamic `alloca` and the device calling convention are
+    still in the queue. A per-lane trap condition is a mask tested
+    against `exec` and one scalar branch.
 12. Each generation's memory model as LLVM emits it: `glc` and
     `buffer_wbinvl1_vol` on GFX9, `buffer_wbl2`/`buffer_invl2` at system
     scope on gfx90a, and gfx940's `sc0`/`sc1` bits with `buffer_wbl2`
@@ -366,6 +367,10 @@ else.
     `shared` global is a `ds_*` instruction; the rest is flat. An `f32`
     atomic add through a flat pointer needs gfx940; below it LLVM spins
     a compare-and-swap, which is not written here yet.
+13. A shuffle is `ds_bpermute_b32`. The wave verbs' `mask` operand names
+    the participating lanes; on this hardware every active lane
+    participates, and the mask narrows a ballot only on a 32-wide wave,
+    where its bits can name them.
 4. `f128` on amd64 is compiler-rt — §0 is explicit that a namespace the
    layout admits is usable whether or not silicon implements it, and
    that lowering supplies the call. Its §A3 rows are the arithmetic and

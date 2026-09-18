@@ -321,12 +321,16 @@ func (x *fnState) selectInst(c *cursor, in *ir.Inst) error {
 	case ir.VSelect:
 		return x.selectV(c, in)
 
+	// —— §E ——
+	case ir.VMemCmp:
+		return x.bulk(c, in)
+
 	// —— §W ——
 	case ir.VWorkitemID, ir.VWorkgroupID, ir.VWorkgroupSize, ir.VNumWorkgroups, ir.VLaneID, ir.VWaveSize:
 		return x.workitem(c, in)
 	case ir.VWaveShflIdx, ir.VWaveShflUp, ir.VWaveShflDown, ir.VWaveShflXor,
 		ir.VWaveReadFirstLane, ir.VWaveBallot, ir.VWaveAny, ir.VWaveAll:
-		return fmt.Errorf("the wave verbs are not lowered yet")
+		return x.wave(c, in)
 
 	// —— §H ——
 	case ir.VAtomicLoad, ir.VAtomicULoad8, ir.VAtomicULoad16,
@@ -353,7 +357,7 @@ func (x *fnState) selectBare(c *cursor, in *ir.Inst) error {
 	case ir.VCall, ir.VCallInd:
 		return fmt.Errorf("calls are not lowered yet")
 	case ir.VMemCpy, ir.VMemMove, ir.VMemSet, ir.VMemCmp:
-		return fmt.Errorf("bulk memory is not lowered yet")
+		return x.bulk(c, in)
 	}
 	return fmt.Errorf("not lowered")
 }

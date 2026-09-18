@@ -107,7 +107,7 @@ func (x *fnState) selectTerm(c *cursor, in *ir.Inst) error {
 		c.Emit(mir.Instr{Op: trapOp{}})
 
 	case ir.VBrTable:
-		return fmt.Errorf("br_table is not lowered yet; it is an if-chain here")
+		return x.brTable(c, in)
 	case ir.VBrInd:
 		return fmt.Errorf("brind has no lowering on a target that branches the whole wave")
 	case ir.VInvoke, ir.VInvokeInd, ir.VResume:

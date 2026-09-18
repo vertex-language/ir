@@ -121,13 +121,29 @@ func (u *uniformity) readOnly(p *ir.Def) bool {
 // isUniform reports whether d holds one value across the wave.
 func (u *uniformity) isUniform(d *ir.Def) bool { return u.uniform[d] }
 
-// anyDivergentBranch reports whether some brif in f branches on a value
-// that differs across the wave.
-func (u *uniformity) anyDivergentBranch(f *ir.Func) bool {
-	for _, blk := range f.Blocks() {
-		if t := blk.Term(); t != nil && t.Op().Verb == ir.VBrIf && !u.isUniform(t.Arg(0)) {
-			return true
+// needsStructure reports whether f branches on a value that differs
+// across the wave: a brif or br_table on one, or a bulk-memory row
+// whose loop would, since isel writes those as branches of its own.
+func (u *uniformity) needsStructure(f *ir.Func) bool {
+	divergent := false
+	f.WalkInsts(func(in *ir.Inst) bool {
+		switch in.Op().Verb {
+		case ir.VBrIf, ir.VBrTable:
+			if !u.isUniform(in.Arg(0)) {
+				divergent = true
+			}
+		case ir.VMemCpy, ir.VMemSet:
+			if !u.isUniform(in.Arg(2)) {
+				divergent = true
+			}
+		case ir.VMemMove, ir.VMemCmp:
+			for _, a := range in.Args() {
+				if !u.isUniform(a) {
+					divergent = true
+				}
+			}
 		}
-	}
-	return false
+		return !divergent
+	})
+	return divergent
 }

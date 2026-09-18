@@ -301,6 +301,8 @@ func (e *emitter) operand(o opnd, in mir.Instr) operand.Operand {
 	case oDS:
 		// The LDS offset is the flat address's low dword.
 		return operand.DS(e.half(in.Uses[o.i], false)).Off(int32(o.imm))
+	case oDS32:
+		return operand.DS(e.reg(in.Uses[o.i])).Off(int32(o.imm))
 	case oSharedBase:
 		return reg.SRC_SHARED_BASE
 	case oPrivateBase:

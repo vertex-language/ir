@@ -194,7 +194,8 @@ const (
 	oGlobal        // a global address: [Uses[i] (VGPR pair)], off + imm offset
 	oGlobalS       // a global address: [Uses[i] (VGPR) + Uses[i+1] (SGPR pair)] + imm
 	oSMEM          // a scalar address: Uses[i] (SGPR pair) + imm offset
-	oDS            // an LDS address: Uses[i] + imm offset
+	oDS            // an LDS address: the low dword of the pair Uses[i], + imm offset
+	oDS32          // an LDS address: the dword Uses[i] + imm offset
 	oLabel         // a branch target, sym
 	oWait          // s_waitcnt's counts
 	oSymLo         // sym@rel32@lo+imm, a literal the linker fills
