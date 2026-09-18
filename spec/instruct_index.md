@@ -885,7 +885,7 @@ function call.
 | Half floats | `f16` and `bf16` as namespaces the `layout` block admits, under the same rule as `ext-float`; each pays §C's conversion cost. |
 | Dynamic workgroup storage size | An `i32.dynamic_shared_size` row in §W1; the unsized `shared` import is in the grammar (§19.24). |
 | Address-space attributes | A `space` `mem-attr` naming where an access resolves, for a lowering that can prove nothing from the pointer. |
-| Metadata kinds | New `!ident` names; debug information is the first consumer. |
+| Metadata kinds | New `!ident` names; debug information is the first consumer. Two are named already: `!max_workgroup_size n` and `!min_workgroups_per_cu n` on a `kernel` function are its launch bounds -- the most work-items a launch may give it, and the fewest workgroups a compute unit should hold -- which a backend turns into its own directive (PTX's `.maxntid` and `.minnctapersm`, the AMDGPU descriptor's `max_flat_workgroup_size`) and which say nothing about the function's meaning. |
 
 Each row is additive: a new namespace, a new verb in an existing family, or a
 new member of an existing modifier list. None changes the meaning of any

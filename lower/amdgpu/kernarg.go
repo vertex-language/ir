@@ -171,6 +171,13 @@ func (x *fnState) kernelOptions(vgprs, sgprs int) []amdgpuasm.KernelOption {
 		amdgpuasm.WithWorkitemIDs(k.wiIDs),
 	}
 	// Every kernel of the module shares the module's LDS layout.
+	for _, a := range x.fn.Attached() {
+		if a.Name == "max_workgroup_size" && len(a.Args) == 1 {
+			if n := a.Args[0].Int(); a.Args[0].Kind() == ir.MetaInt && n > 0 {
+				opts = append(opts, amdgpuasm.WithMaxFlatWorkgroupSize(int(n)))
+			}
+		}
+	}
 	if x.l.ldsSize > 0 {
 		opts = append(opts, amdgpuasm.WithLDS(int(x.l.ldsSize)))
 	}

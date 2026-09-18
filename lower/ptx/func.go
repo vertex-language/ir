@@ -60,6 +60,12 @@ func (l *lowerer) declareFunc(f *ir.Func) error {
 	if f.Signature().CallConv() == ir.Kernel {
 		k := ptx.NewKernel(symName(f.Name()))
 		k.Linkage = funcLinkage(f)
+		if n, ok := launchBound(f, "max_workgroup_size"); ok {
+			k.MaxNTid = ptx.Dim3{int(n), 1, 1}
+		}
+		if n, ok := launchBound(f, "min_workgroups_per_cu"); ok {
+			k.MinNCTAPerSM = int(n)
+		}
 		for i, p := range f.Signature().Params() {
 			if bv, ok := byValOf(p); ok {
 				size, align, err := sizeAlign(bv.FType())
@@ -157,6 +163,19 @@ func (l *lowerer) newFunc(name string, sig *ir.Sig) (*ptx.Func, error) {
 		pf.Param(paramName(p, i), paramType(p.Type))
 	}
 	return pf, nil
+}
+
+// launchBound is a kernel's launch-bound metadata by name, when attached
+// with one integer.
+func launchBound(f *ir.Func, name string) (int64, bool) {
+	for _, a := range f.Attached() {
+		if a.Name == name && len(a.Args) == 1 {
+			if n := a.Args[0].Int(); a.Args[0].Kind() == ir.MetaInt && n > 0 {
+				return n, true
+			}
+		}
+	}
+	return 0, false
 }
 
 // byValOf is the aggregate a byval parameter carries, if it is one.
