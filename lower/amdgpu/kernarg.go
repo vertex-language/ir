@@ -136,6 +136,12 @@ func (x *fnState) kernelOptions(vgprs, sgprs int) []amdgpuasm.KernelOption {
 	if x.l.ldsSize > 0 {
 		opts = append(opts, amdgpuasm.WithLDS(int(x.l.ldsSize)))
 	}
+	if x.scratch {
+		opts = append(opts, amdgpuasm.WithScratch(int(x.frame.size())))
+		if !x.l.architectedScratch() {
+			opts = append(opts, amdgpuasm.WithFlatScratchInit())
+		}
+	}
 	return opts
 }
 
@@ -153,6 +159,16 @@ type fnState struct {
 	// masked from the start.
 	divergent bool
 
+	// scratch says the function has a private segment: it allocs, or it
+	// spills. frame is its layout; fsInit and waveOff the SGPRs the
+	// prologue builds FLAT_SCRATCH from, scratchZero the base the
+	// scratch instructions take before gfx940.
+	scratch     bool
+	frame       *frame
+	fsInit      mir.VReg
+	waveOff     mir.VReg
+	scratchZero mir.VReg
+
 	// The incoming registers, pinned: the kernarg pointer, the workgroup
 	// ids, the work-item id VGPRs.
 	kernarg mir.VReg
@@ -166,16 +182,36 @@ func (x *fnState) entry(mb *mir.Block) error {
 	c := x.cursor(mb)
 	vr := x.vr
 
-	// User SGPRs: the kernarg pointer in s[0:1]. System SGPRs follow.
+	// User SGPRs: the kernarg pointer in s[0:1], then flat scratch init
+	// where a prologue needs it. System SGPRs follow: the workgroup ids,
+	// then the wave's scratch offset.
 	x.kernarg = vr.fresh(s64)
 	vr.pin(x.kernarg, physOf(s64, 0))
 	next := 2
+	initScratch := x.scratch && !x.l.architectedScratch()
+	if initScratch {
+		x.fsInit = vr.fresh(s64)
+		vr.pin(x.fsInit, physOf(s64, next))
+		next += 2
+	}
 	for axis := 0; axis < 3; axis++ {
 		if axis > 0 && !x.k.wgIDs[axis] {
 			continue
 		}
 		x.wgID[axis] = vr.fresh(s32)
 		vr.pin(x.wgID[axis], physOf(s32, next))
+		next++
+	}
+	if initScratch {
+		x.waveOff = vr.fresh(s32)
+		vr.pin(x.waveOff, physOf(s32, next))
+		next++
+		// The zero base the scratch instructions take, pinned so that
+		// the spiller — which names it in every spill — never spills it.
+		// A pinned register inside the allocatable file is one the
+		// allocator keeps clear for as long as the value lives.
+		x.scratchZero = vr.fresh(s32)
+		vr.pin(x.scratchZero, physOf(s32, next))
 		next++
 	}
 	n := x.k.wiIDs
@@ -185,6 +221,10 @@ func (x *fnState) entry(mb *mir.Block) error {
 	for i := 0; i < n; i++ {
 		x.tid[i] = vr.fresh(v32)
 		vr.pin(x.tid[i], physOf(v32, i))
+	}
+
+	if initScratch {
+		x.scratchPrologue(c)
 	}
 
 	// The arguments: scalar loads at their offsets, then copies out.

@@ -309,7 +309,7 @@ else.
 | §B comparisons | ✅ | ✅ | ✅ | ✅ | ✅ |
 | §C–§C4 conversions | ✅ | ✅ | ✅ | ✅ | ✅ |
 | §D · §D2 memory, sub-width memory | ✅ | ✅ | ✅ | ✅ natural alignment ⁵ | ✅ natural alignment ⁵ |
-| §D3 pointer ops | all but `tlsaddr` | all but `tlsaddr` | all but `tlsaddr` | `alloc`, `alloca`, `getaddr`, `diff`, stack save/restore ⁶ | `getaddr`, `diff` ¹¹ |
+| §D3 pointer ops | all but `tlsaddr` | all but `tlsaddr` | all but `tlsaddr` | `alloc`, `alloca`, `getaddr`, `diff`, stack save/restore ⁶ | `alloc`, `getaddr`, `diff` ¹¹ |
 | §E bulk memory | ✅ non-`volatile` | ✅ non-`volatile` | ✅ non-`volatile` | ✅ as byte loops | — ¹¹ |
 | §F select | ✅ | ✅ | ✅ | ✅ | ✅ |
 | §G · §G2 calls, terminators, computed branches | ✅ | ✅ | ✅ | all but `brind` ⁷ | `br`, `brif`, `return`, `trap`; calls inlined; not `br_table`, `brind` ¹¹ |
@@ -352,8 +352,11 @@ else.
 11. `lower/amdgpu` lowers a kernel whose control flow is reducible: a
     function with no divergent branch keeps scalar branches, and one
     with any is structurized — every block behind a flow that narrows
-    `exec` to the lanes whose predicate is set. Private memory (`alloc`,
-    spilling), bulk memory, the wave verbs and the device calling
+    `exec` to the lanes whose predicate is set. `ptr.alloc` is a flat
+    pointer into the private segment and the allocator spills to it —
+    VGPRs to scratch slots, SGPRs to lanes of a reserved VGPR — up to a
+    4 KB frame, which is what a scratch offset reaches. Bulk memory,
+    the wave verbs, a dynamic `alloca` and the device calling
     convention are still in the queue. A per-lane trap condition is a
     mask tested against `exec` and one scalar branch.
 12. Each generation's memory model as LLVM emits it: `glc` and

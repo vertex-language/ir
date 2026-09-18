@@ -126,3 +126,131 @@ func TestSharedAtomics(t *testing.T) {
 		}
 	}
 }
+
+// Private memory: a ptr.alloc is a flat pointer in the private
+// aperture, the descriptor asks for the segment, and before gfx940 a
+// prologue builds FLAT_SCRATCH.
+func TestAlloc(t *testing.T) {
+	build := func() *ir.Module {
+		m := ir.NewModule("pa", ir.AMDGCN)
+		fn := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+		p := fn.ParamPtr("p")
+		e := fn.Entry()
+		buf := e.Ptr.Alloc(64, 16)
+		tid := e.I32.WorkitemID(ir.X)
+		slot := e.Ptr.Add(buf, e.I64.Shl(e.I64.ZExtI32(e.I32.And(tid, e.I32.Const(15))), e.I64.Const(2)))
+		e.I32.Store(tid, slot)
+		e.I32.Store(e.I32.Load(e.Ptr.Add(buf, e.I64.Const(12))), p)
+		e.Return()
+		return m
+	}
+	for _, c := range []struct {
+		asic  feature.ASIC
+		wants []string
+	}{
+		{feature.GFX942, []string{"src_private_base", "flat_store_dword", "flat_load_dword"}},
+		{feature.GFX900, []string{"s_add_u32 flat_scratch_lo, s2, s5", "s_addc_u32 flat_scratch_hi, s3, 0", "src_private_base"}},
+	} {
+		t.Run(c.asic.String(), func(t *testing.T) {
+			o := lowerObj(t, build(), lower.Options{ASIC: c.asic})
+			kd := o.KernelDescriptors()[0]
+			if kd.PrivateSegmentFixedSize != 64 || kd.ComputePgmRsrc2&1 == 0 {
+				t.Errorf("private segment %d, rsrc2 %#x", kd.PrivateSegmentFixedSize, kd.ComputePgmRsrc2)
+			}
+			got := disassemble(t, o, c.asic)
+			if got == nil {
+				return
+			}
+			text := strings.Join(got, "\n")
+			if os.Getenv("AMDGPU_LISTING") != "" {
+				t.Log("\n" + text)
+			}
+			for _, w := range c.wants {
+				if !strings.Contains(text, w) {
+					t.Errorf("no %q in:\n%s", w, text)
+				}
+			}
+		})
+	}
+}
+
+// Spilling: more values live than the file holds. The function is
+// selected again with scratch, VGPRs spill to slots and SGPRs to lanes.
+func TestSpill(t *testing.T) {
+	build := func() *ir.Module {
+		m := ir.NewModule("sp", ir.AMDGCN)
+		fn := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+		p := fn.ParamPtr("p")
+		e := fn.Entry()
+		// Seventy loads, all live until the sum: more than the fifty-eight
+		// singles.
+		var vs []ir.I32
+		for i := 0; i < 70; i++ {
+			vs = append(vs, e.I32.Load(e.Ptr.Add(p, e.I64.Const(int64(i*4)))))
+		}
+		sum := vs[0]
+		for _, v := range vs[1:] {
+			sum = e.I32.Add(sum, v)
+		}
+		e.I32.Store(sum, p)
+		e.Return()
+		return m
+	}
+	for _, asic := range []feature.ASIC{feature.GFX942, feature.GFX90A} {
+		t.Run(asic.String(), func(t *testing.T) {
+			o := lowerObj(t, build(), lower.Options{ASIC: asic})
+			kd := o.KernelDescriptors()[0]
+			if kd.PrivateSegmentFixedSize == 0 {
+				t.Errorf("no private segment")
+			}
+			got := disassemble(t, o, asic)
+			if got == nil {
+				return
+			}
+			text := strings.Join(got, "\n")
+			if os.Getenv("AMDGPU_LISTING") != "" {
+				t.Log("\n" + text)
+			}
+			for _, w := range []string{"scratch_store_dword", "scratch_load_dword"} {
+				if !strings.Contains(text, w) {
+					t.Errorf("no %q in:\n%s", w, text)
+				}
+			}
+		})
+	}
+}
+
+// Scalar spills: forty lane masks live at once, more than the pairs
+// hold, go to lanes of the reserved VGPR through v_writelane and come
+// back through v_readlane.
+func TestSpillMasks(t *testing.T) {
+	m := ir.NewModule("sm", ir.AMDGCN)
+	fn := m.Func("k").Export().CallConv(ir.Kernel).NoUnwind()
+	p := fn.ParamPtr("p")
+	e := fn.Entry()
+	tid := e.I32.WorkitemID(ir.X)
+	var ms []ir.I1
+	for i := 0; i < 40; i++ {
+		ms = append(ms, e.I32.ULt(tid, e.I32.Const(int64(i))))
+	}
+	all := ms[0]
+	for _, mm := range ms[1:] {
+		all = e.I1.And(all, mm)
+	}
+	e.I32.Store(e.I32.ZExtI1(all), p)
+	e.Return()
+	o := lowerObj(t, m, lower.Options{ASIC: feature.GFX942})
+	got := disassemble(t, o, feature.GFX942)
+	if got == nil {
+		return
+	}
+	text := strings.Join(got, "\n")
+	if os.Getenv("AMDGPU_LISTING") != "" {
+		t.Log("\n" + text)
+	}
+	for _, w := range []string{"v_writelane_b32 v59", "v_readlane_b32 s"} {
+		if !strings.Contains(text, w) {
+			t.Errorf("no %q in:\n%s", w, text)
+		}
+	}
+}

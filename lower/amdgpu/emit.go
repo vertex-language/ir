@@ -254,6 +254,10 @@ func (e *emitter) instr(in mir.Instr, next string) error {
 	case pendSetAllOp:
 		p := e.reg(in.Defs[0])
 		e.text.Emit("s_or_b64", p, p, reg.EXEC)
+	case spillStoreOp:
+		return e.spillStore(op, in)
+	case spillLoadOp:
+		return e.spillLoad(op, in)
 	case undefOp:
 	default:
 		return fmt.Errorf("%T is not an instruction this emitter knows", in.Op)
@@ -299,6 +303,12 @@ func (e *emitter) operand(o opnd, in mir.Instr) operand.Operand {
 		return operand.DS(e.half(in.Uses[o.i], false)).Off(int32(o.imm))
 	case oSharedBase:
 		return reg.SRC_SHARED_BASE
+	case oPrivateBase:
+		return reg.SRC_PRIVATE_BASE
+	case oFlatScratchLo:
+		return reg.FLAT_SCRATCH_LO
+	case oFlatScratchHi:
+		return reg.FLAT_SCRATCH_HI
 	case oCache:
 		return operand.Cache(o.glc, o.sc1)
 	case oFixedV:
@@ -323,6 +333,61 @@ func (e *emitter) operand(o opnd, in mir.Instr) operand.Operand {
 		return operand.Ref(o.sym, obj.RefRel32Hi).WithAddend(o.imm)
 	}
 	panic(fmt.Sprintf("amdgpu: operand kind %d", o.kind))
+}
+
+// spillStore and spillLoad are the spiller's instructions: a vector
+// value to its scratch slot, a scalar to lanes of the reserved VGPR.
+func (e *emitter) spillStore(op spillStoreOp, in mir.Instr) error {
+	switch op.w {
+	case v32, v64:
+		mn := "scratch_store_dword"
+		if op.w == v64 {
+			mn = "scratch_store_dwordx2"
+		}
+		e.text.Emit(mn, e.scratchAt(op.off, in.Uses[1:]), e.reg(in.Uses[0]))
+		e.text.Emit("s_waitcnt", operand.NewWaitCnt().VM(0).LGKM(0))
+	case s32:
+		e.lane(op.off, e.reg(in.Uses[0]))
+	case s64:
+		e.lane(op.off, e.half(in.Uses[0], false))
+		e.lane(op.off+1, e.half(in.Uses[0], true))
+	}
+	return nil
+}
+
+func (e *emitter) spillLoad(op spillLoadOp, in mir.Instr) error {
+	switch op.w {
+	case v32, v64:
+		mn := "scratch_load_dword"
+		if op.w == v64 {
+			mn = "scratch_load_dwordx2"
+		}
+		e.text.Emit(mn, e.reg(in.Defs[0]), e.scratchAt(op.off, in.Uses))
+		e.text.Emit("s_waitcnt", operand.NewWaitCnt().VM(0).LGKM(0))
+	case s32:
+		e.text.Emit("v_readlane_b32", e.reg(in.Defs[0]), reg.VGPR(sgprSpillVGPR), operand.Imm(int32(op.off)))
+	case s64:
+		e.text.Emit("v_readlane_b32", e.half(in.Defs[0], false), reg.VGPR(sgprSpillVGPR), operand.Imm(int32(op.off)))
+		e.text.Emit("v_readlane_b32", e.half(in.Defs[0], true), reg.VGPR(sgprSpillVGPR), operand.Imm(int32(op.off+1)))
+	}
+	return nil
+}
+
+// scratchAt is a scratch slot's address: no vector offset, and the zero
+// SGPR as the base where "off" is not one.
+func (e *emitter) scratchAt(off int64, base []mir.VReg) operand.MemOperand {
+	if len(base) > 0 {
+		return operand.Scratch(nil, e.reg(base[0])).Off(int32(off))
+	}
+	return operand.Scratch(nil).Off(int32(off))
+}
+
+// lane writes an SGPR into one lane of the reserved VGPR. The lane
+// select is M0: gfx9's constant bus admits one SGPR, and the value is
+// it.
+func (e *emitter) lane(n int64, s reg.Reg) {
+	e.text.Emit("s_mov_b32", reg.M0, operand.Imm(int32(n)))
+	e.text.Emit("v_writelane_b32", reg.VGPR(sgprSpillVGPR), s, reg.M0)
 }
 
 // modified wraps a source in its neg and abs modifiers.

@@ -310,8 +310,10 @@ func (x *fnState) selectInst(c *cursor, in *ir.Inst) error {
 		return x.getaddr(c, in)
 	case ir.VDiff:
 		return x.addSub(c, in)
-	case ir.VAlloc, ir.VAlloca, ir.VStackSave, ir.VStackRestore:
-		return fmt.Errorf("private memory needs the scratch segment, which is not set up yet")
+	case ir.VAlloc:
+		return x.alloc(c, in)
+	case ir.VAlloca, ir.VStackSave, ir.VStackRestore:
+		return fmt.Errorf("a dynamic alloca needs a stack pointer, which a kernel has no convention for yet")
 	case ir.VTLSAddr, ir.VBlockAddr, ir.VFrameAddr, ir.VReturnAddr:
 		return fmt.Errorf("no lowering on the device")
 

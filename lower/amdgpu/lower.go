@@ -30,6 +30,10 @@
 //     provably goes there is a ds_* instruction. §H is the returning
 //     flat or DS atomic with each generation's cache control around it;
 //     see atomic.go.
+//   - 34, private memory. ptr.alloc is a flat pointer in the private
+//     aperture, the allocator spills VGPRs to scratch slots and SGPRs to
+//     lanes of a reserved VGPR, and a function that turns out to need
+//     scratch is selected again with it; see scratch.go.
 //
 // # What is different about this target
 //
@@ -186,6 +190,27 @@ func (l *lowerer) lowerFunc(fn *ir.Func) error {
 		}
 	}
 
+	fr, err := layoutFrame(fn)
+	if err != nil {
+		return fmt.Errorf("lower: @%s: %w", fn.Name(), err)
+	}
+	scratch := len(fr.allocs) > 0
+	for {
+		err := l.lowerFuncWith(fn, fr, scratch)
+		if err == errNeedScratch && !scratch {
+			// The allocator ran out of registers: the entry needs the
+			// scratch SGPRs and a prologue, so select again with them.
+			scratch = true
+			fr.slots = 0
+			continue
+		}
+		return err
+	}
+}
+
+// lowerFuncWith selects, allocates and emits one kernel, with or without
+// a private segment.
+func (l *lowerer) lowerFuncWith(fn *ir.Func, fr *frame, scratch bool) error {
 	uni := analyzeUniformity(fn)
 	mf := mir.NewFunc()
 	pool := pool()
@@ -200,7 +225,7 @@ func (l *lowerer) lowerFunc(fn *ir.Func) error {
 	if err != nil {
 		return err
 	}
-	x := &fnState{l: l, fn: fn, mf: mf, vr: vr, uni: uni, k: k, divergent: uni.anyDivergentBranch(fn)}
+	x := &fnState{l: l, fn: fn, mf: mf, vr: vr, uni: uni, k: k, divergent: uni.anyDivergentBranch(fn), scratch: scratch, frame: fr}
 	if err := x.entry(mbs[0]); err != nil {
 		return fmt.Errorf("lower: @%s: %w", fn.Name(), err)
 	}
@@ -251,9 +276,22 @@ func (l *lowerer) lowerFunc(fn *ir.Func) error {
 			return fmt.Errorf("lower: @%s: %w", fn.Name(), err)
 		}
 	}
-	assigned, err := regalloc.Assign(mf, pool)
+	if !scratch {
+		assigned, err := regalloc.Assign(mf, pool)
+		if err != nil {
+			return errNeedScratch
+		}
+		return l.emit(x, assigned)
+	}
+	assigned, err := regalloc.Spilling(mf, pool, &spiller{x: x})
 	if err != nil {
-		return fmt.Errorf("lower: @%s: %w; spilling needs scratch memory, which is not set up yet", fn.Name(), err)
+		return fmt.Errorf("lower: @%s: %w", fn.Name(), err)
+	}
+	if fr.size() > maxFrame {
+		return fmt.Errorf("lower: @%s: a private segment of %d bytes exceeds the %d a scratch offset reaches; not lowered yet", fn.Name(), fr.size(), maxFrame)
+	}
+	if fr.slots*2 > 64 {
+		return fmt.Errorf("lower: @%s: %d spill slots, more than the 32 the scalar-spill VGPR's lanes hold; not lowered yet", fn.Name(), fr.slots)
 	}
 	return l.emit(x, assigned)
 }

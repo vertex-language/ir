@@ -94,7 +94,7 @@ const (
 const (
 	sgprSinglesFrom, sgprSinglesTo = 8, 31   // s8..s31
 	sgprPairsFrom, sgprPairsTo     = 32, 100 // s[32:33]..s[100:101]
-	vgprSinglesFrom, vgprSinglesTo = 1, 59   // v1..v59; v[60:63] is casScratch
+	vgprSinglesFrom, vgprSinglesTo = 1, 58   // v1..v58; v59 holds spilled SGPRs, v[60:63] is casScratch
 	vgprPairsFrom, vgprPairsTo     = 64, 254 // v[64:65]..v[254:255]
 )
 
@@ -185,23 +185,26 @@ const (
 	oUseHi                 // the high half
 	oDefLo                 // the low half of the pair Defs[i]
 	oDefHi
-	oImm        // an inline constant or literal
-	oFImm       // a float constant: imm holds the f32 bits
-	oVCC        // the VCC register
-	oExec       // the EXEC register
-	oM0         // M0
-	oFlat       // a flat address: [Uses[i]] + imm offset
-	oGlobal     // a global address: [Uses[i] (VGPR pair)], off + imm offset
-	oGlobalS    // a global address: [Uses[i] (VGPR) + Uses[i+1] (SGPR pair)] + imm
-	oSMEM       // a scalar address: Uses[i] (SGPR pair) + imm offset
-	oDS         // an LDS address: Uses[i] + imm offset
-	oLabel      // a branch target, sym
-	oWait       // s_waitcnt's counts
-	oSymLo      // sym@rel32@lo+imm, a literal the linker fills
-	oSymHi      // sym@rel32@hi+imm
-	oSharedBase // the LDS aperture, src_shared_base
-	oCache      // a cache-control instruction's scope bits
-	oFixedV     // a fixed VGPR, number imm; a tuple of i registers when i > 1
+	oImm           // an inline constant or literal
+	oFImm          // a float constant: imm holds the f32 bits
+	oVCC           // the VCC register
+	oExec          // the EXEC register
+	oM0            // M0
+	oFlat          // a flat address: [Uses[i]] + imm offset
+	oGlobal        // a global address: [Uses[i] (VGPR pair)], off + imm offset
+	oGlobalS       // a global address: [Uses[i] (VGPR) + Uses[i+1] (SGPR pair)] + imm
+	oSMEM          // a scalar address: Uses[i] (SGPR pair) + imm offset
+	oDS            // an LDS address: Uses[i] + imm offset
+	oLabel         // a branch target, sym
+	oWait          // s_waitcnt's counts
+	oSymLo         // sym@rel32@lo+imm, a literal the linker fills
+	oSymHi         // sym@rel32@hi+imm
+	oSharedBase    // the LDS aperture, src_shared_base
+	oPrivateBase   // the scratch aperture, src_private_base
+	oFlatScratchLo // flat_scratch_lo
+	oFlatScratchHi // flat_scratch_hi
+	oCache         // a cache-control instruction's scope bits
+	oFixedV        // a fixed VGPR, number imm; a tuple of i registers when i > 1
 )
 
 // amdOp is one machine instruction: a mnemonic and how to spell it.
