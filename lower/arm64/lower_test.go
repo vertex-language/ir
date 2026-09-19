@@ -161,9 +161,10 @@ func TestLowerAddInPlace(t *testing.T) {
 	objdumpHas(t, "dbl", raw, "add")
 }
 
-// A comparison is always its own instruction. ADD does not set the flags here
-// — ADDS does — so there is no fusing to decide about and every §B result is
-// materialized with CSET.
+// A comparison is its own instruction -- ADD does not set the flags here,
+// ADDS does -- and isel materializes every §B result with CSET. The peephole
+// pass then folds a CSET whose only reader is the branch at once after it
+// into that branch.
 func TestLowerCompareAndBranch(t *testing.T) {
 	m := ir.NewModule("t", ir.AArch64Linux)
 	fn := m.Func("min").Export()
@@ -178,18 +179,18 @@ func TestLowerCompareAndBranch(t *testing.T) {
 	join.Return(r)
 
 	got, raw := lowerWords(t, m)
+	// The comparison's CSET and the branch's test of it are fused by the
+	// peephole pass into the one branch on the condition; the "then" edge,
+	// a bare jump once r = a is already in place, is gone, so the branch
+	// goes straight to the join, and layout puts the else edge before the
+	// join so that it runs on into it.
 	equalWords(t, got, []uint32{
 		0x6b01001f, // cmp w0, w1        (subs wzr, w0, w1)
-		0x9a9fa7e2, // cset x2, lt
-		0x7100005f, // cmp w2, #0
-		0x54000061, // b.ne +12          (the "then" edge)
-		0x14000003, // b +12             (the "else" edge)
-		0xd65f03c0, // join: ret         (r is already in w0)
-		0x17ffffff, // then edge: b -4   (r = a, already in place)
+		0x5400004b, // b.lt +8           (to the join)
 		0x2a0103e0, // else edge: mov w0, w1
-		0x17fffffd, // b -12
+		0xd65f03c0, // join: ret         (r is in w0)
 	})
-	objdumpHas(t, "min", raw, "cmp", "cset", "b.ne")
+	objdumpHas(t, "min", raw, "cmp", "b.lt")
 }
 
 // A load through a pointer, and the frame that is not needed for it.
@@ -223,8 +224,10 @@ func TestLowerFrame(t *testing.T) {
 	fn.ReturnsI64()
 	entry := fn.Entry()
 	p := entry.Ptr.Alloc(8, 8)
-	entry.I64.Store(v, p)
-	entry.Return(entry.I64.Load(p))
+	// Volatile, or the slot is only a variable and never reaches the
+	// frame: see ir.PromoteSlots and TestLowerPromotesASlot.
+	entry.I64.Store(v, p, ir.Volatile)
+	entry.Return(entry.I64.Load(p, ir.Volatile))
 
 	got, raw := lowerWords(t, m)
 	equalWords(t, got, []uint32{
@@ -239,6 +242,24 @@ func TestLowerFrame(t *testing.T) {
 		0xd65f03c0, // ret
 	})
 	objdumpHas(t, "slot", raw, "stp", "ldp", "ret")
+}
+
+// TestLowerPromotesASlot: the same slot with ordinary accesses is only a
+// variable, so it takes no frame and the function is the value it was given.
+func TestLowerPromotesASlot(t *testing.T) {
+	m := ir.NewModule("t", ir.AArch64Linux)
+	fn := m.Func("slot").Export()
+	v := fn.ParamI64("v")
+	fn.ReturnsI64()
+	entry := fn.Entry()
+	p := entry.Ptr.Alloc(8, 8)
+	entry.I64.Store(v, p)
+	entry.Return(entry.I64.Load(p))
+
+	got, _ := lowerWords(t, m)
+	equalWords(t, got, []uint32{
+		0xd65f03c0, // ret                  (v is already in x0)
+	})
 }
 
 // A64 has no instruction that takes a 64-bit literal, so a constant is a MOVZ

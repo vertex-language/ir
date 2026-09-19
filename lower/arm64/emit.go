@@ -37,6 +37,12 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 	var tables []brTableOp
 
 	for i, mb := range mf.Blocks {
+		// The label a branch at the end of this block need not name:
+		// the block emitted right after it.
+		next := ""
+		if i+1 < len(mf.Blocks) {
+			next = mf.Blocks[i+1].Label
+		}
 		switch {
 		case i == 0:
 			text.Label(fn.Name(), funcBinding(fn), arm64asm.Func)
@@ -126,14 +132,25 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 
 			case bcondOp:
 				// The conditional branch, then the fallthrough as an
-				// unconditional one. B.cond reaches ±1MB and B reaches
-				// ±128MB, and emitting both unconditionally is what keeps
-				// the range of the pair the range of the wider.
-				text.BCond(cond(op.cond), arm64asm.Label(op.then))
-				text.B(arm64asm.Label(op.els))
+				// unconditional one -- unless the block emitted next is
+				// one of the two arms, in which case that arm is reached
+				// by falling through and the branch to it is not written.
+				// B.cond reaches ±1MB and B reaches ±128MB; a function
+				// past the shorter is not one this package has met.
+				switch {
+				case op.els == next:
+					text.BCond(cond(op.cond), arm64asm.Label(op.then))
+				case op.then == next:
+					text.BCond(cond(op.cond.inverse()), arm64asm.Label(op.els))
+				default:
+					text.BCond(cond(op.cond), arm64asm.Label(op.then))
+					text.B(arm64asm.Label(op.els))
+				}
 
 			case bOp:
-				text.B(arm64asm.Label(op.target))
+				if op.target != next {
+					text.B(arm64asm.Label(op.target))
+				}
 
 			case trapOp:
 				text.Brk(0)
@@ -142,24 +159,16 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 				emitEpilogue(text, fr, sv)
 
 			case loadOp:
-				emitLoad(text, op.w, in, x, w, d, s)
+				emitLoad(text, op, in, x, w, d, s)
 
 			case storeOp:
-				emitStore(text, op.w, in, x, w, d, s)
+				emitStore(text, op, in, x, w, d, s)
 
 			case extLoadOp:
 				emitExtLoad(text, op, in, x, w)
 
 			case subStoreOp:
-				base := arm64asm.Mem8(x(in.Uses[1]))
-				switch op.to {
-				case a8:
-					text.StrbImm(w(in.Uses[0]), base)
-				case a16:
-					text.StrhImm(w(in.Uses[0]), arm64asm.Mem16(x(in.Uses[1])))
-				default:
-					text.StrImm32(w(in.Uses[0]), arm64asm.Mem32(x(in.Uses[1])))
-				}
+				emitSubStore(text, op, in, x, w)
 
 			case allocaOp:
 				emitAlloca(text, op, x(in.Defs[0]), x(in.Defs[1]), x(in.Uses[0]))
@@ -171,7 +180,13 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 				text.MovSp64(reg.SP, x(in.Uses[0]))
 
 			case addImmOp:
-				text.AddImm64(x(in.Defs[0]), x(in.Uses[0]), op.imm)
+				emitAddImm(text, op.imm, op.w, false, in, x, w)
+
+			case flagAddImmOp:
+				emitAddImm(text, op.imm, op.w, true, in, x, w)
+
+			case shiftImmOp:
+				emitShiftImm(text, op, in, x, w)
 
 			case siteOp:
 				// Nothing is emitted: the mark is the offset itself,
@@ -346,11 +361,17 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 				emitStxr(text, op, in, x, w)
 
 			case cbnzOp:
-				// The same pair bcondOp emits, for the same reason:
-				// CBNZ reaches ±1MB and B reaches ±128MB, and
-				// emitting both makes the pair's range the wider one.
-				text.Cbnz32(w(in.Uses[0]), arm64asm.Label(op.then))
-				text.B(arm64asm.Label(op.els))
+				// The same pair bcondOp emits, with the same arm left
+				// to fall through when it is the block emitted next.
+				switch {
+				case op.els == next:
+					text.Cbnz32(w(in.Uses[0]), arm64asm.Label(op.then))
+				case op.then == next:
+					text.Cbz32(w(in.Uses[0]), arm64asm.Label(op.els))
+				default:
+					text.Cbnz32(w(in.Uses[0]), arm64asm.Label(op.then))
+					text.B(arm64asm.Label(op.els))
+				}
 
 			case clrexOp:
 				text.Clrex()
@@ -449,6 +470,8 @@ func cond(c condCode) arm64asm.Cond {
 		return arm64asm.PL
 	case condVS:
 		return arm64asm.VS
+	case condVC:
+		return arm64asm.VC
 	}
 	return arm64asm.AL
 }
@@ -799,37 +822,71 @@ func emitExtend(text *arm64asm.Section, op extOp, xd, xn reg.X, wd, wn reg.W) {
 	text.Ubfm64(xd, xn, 0, bits-1)
 }
 
-func emitLoad(text *arm64asm.Section, wd width, in mir.Instr,
+// address is the memory operand of a load or store whose Uses hold the base
+// at `at`: the base alone, the base plus the displacement the peephole pass
+// folded in, or the base indexed by the register after it.
+func address(m arm64asm.Mem, in mir.Instr, at int, off int64, indexed bool,
+	x func(mir.VReg) reg.X) arm64asm.Mem {
+	switch {
+	case indexed:
+		return m.Indexed(x(in.Uses[at+1]), arm64asm.ExtLSL, 0)
+	case off != 0:
+		return m.Off(off)
+	}
+	return m
+}
+
+func emitLoad(text *arm64asm.Section, op loadOp, in mir.Instr,
 	x func(mir.VReg) reg.X, w func(mir.VReg) reg.W,
 	d func(mir.VReg) reg.D, s func(mir.VReg) reg.S) {
 
 	base := x(in.Uses[0])
-	switch wd {
+	dst := in.Defs[0]
+	// The peephole pass indexes integer accesses only: the register
+	// offset form of the vector-register loads is not in the assembler.
+	if op.indexed {
+		if op.w == w32 {
+			text.LdrReg32(w(dst), address(arm64asm.Mem32(base), in, 0, 0, true, x))
+		} else {
+			text.LdrReg64(x(dst), address(arm64asm.Mem64(base), in, 0, 0, true, x))
+		}
+		return
+	}
+	switch op.w {
 	case wf32:
-		text.LdrImmS(s(in.Defs[0]), arm64asm.Mem32(base))
+		text.LdrImmS(s(dst), arm64asm.Mem32(base).Off(op.off))
 	case wf64:
-		text.LdrImmD(d(in.Defs[0]), arm64asm.Mem64(base))
+		text.LdrImmD(d(dst), arm64asm.Mem64(base).Off(op.off))
 	case w32:
-		text.LdrImm32(w(in.Defs[0]), arm64asm.Mem32(base))
+		text.LdrImm32(w(dst), arm64asm.Mem32(base).Off(op.off))
 	default:
-		text.LdrImm64(x(in.Defs[0]), arm64asm.Mem64(base))
+		text.LdrImm64(x(dst), arm64asm.Mem64(base).Off(op.off))
 	}
 }
 
-func emitStore(text *arm64asm.Section, wd width, in mir.Instr,
+func emitStore(text *arm64asm.Section, op storeOp, in mir.Instr,
 	x func(mir.VReg) reg.X, w func(mir.VReg) reg.W,
 	d func(mir.VReg) reg.D, s func(mir.VReg) reg.S) {
 
 	base := x(in.Uses[1])
-	switch wd {
+	v := in.Uses[0]
+	if op.indexed {
+		if op.w == w32 {
+			text.StrReg32(w(v), address(arm64asm.Mem32(base), in, 1, 0, true, x))
+		} else {
+			text.StrReg64(x(v), address(arm64asm.Mem64(base), in, 1, 0, true, x))
+		}
+		return
+	}
+	switch op.w {
 	case wf32:
-		text.StrImmS(s(in.Uses[0]), arm64asm.Mem32(base))
+		text.StrImmS(s(v), arm64asm.Mem32(base).Off(op.off))
 	case wf64:
-		text.StrImmD(d(in.Uses[0]), arm64asm.Mem64(base))
+		text.StrImmD(d(v), arm64asm.Mem64(base).Off(op.off))
 	case w32:
-		text.StrImm32(w(in.Uses[0]), arm64asm.Mem32(base))
+		text.StrImm32(w(v), arm64asm.Mem32(base).Off(op.off))
 	default:
-		text.StrImm64(x(in.Uses[0]), arm64asm.Mem64(base))
+		text.StrImm64(x(v), arm64asm.Mem64(base).Off(op.off))
 	}
 }
 
@@ -841,23 +898,127 @@ func emitExtLoad(text *arm64asm.Section, op extLoadOp, in mir.Instr,
 
 	base := x(in.Uses[0])
 	dst := in.Defs[0]
+	m8 := address(arm64asm.Mem8(base), in, 0, op.off, op.indexed, x)
+	m16 := address(arm64asm.Mem16(base), in, 0, op.off, op.indexed, x)
+	m32 := address(arm64asm.Mem32(base), in, 0, op.off, op.indexed, x)
+	if op.indexed {
+		switch {
+		case op.from == a8 && op.signed && op.w == w64:
+			text.LdrsbReg64(x(dst), m8)
+		case op.from == a8 && op.signed:
+			text.LdrsbReg32(w(dst), m8)
+		case op.from == a8:
+			text.LdrbReg(w(dst), m8)
+		case op.from == a16 && op.signed && op.w == w64:
+			text.LdrshReg64(x(dst), m16)
+		case op.from == a16 && op.signed:
+			text.LdrshReg32(w(dst), m16)
+		case op.from == a16:
+			text.LdrhReg(w(dst), m16)
+		case op.signed:
+			text.LdrswReg(x(dst), m32)
+		default:
+			text.LdrReg32(w(dst), m32)
+		}
+		return
+	}
 	switch {
 	case op.from == a8 && op.signed && op.w == w64:
-		text.LdrsbImm64(x(dst), arm64asm.Mem8(base))
+		text.LdrsbImm64(x(dst), m8)
 	case op.from == a8 && op.signed:
-		text.LdrsbImm32(w(dst), arm64asm.Mem8(base))
+		text.LdrsbImm32(w(dst), m8)
 	case op.from == a8:
-		text.LdrbImm(w(dst), arm64asm.Mem8(base))
+		text.LdrbImm(w(dst), m8)
 	case op.from == a16 && op.signed && op.w == w64:
-		text.LdrshImm64(x(dst), arm64asm.Mem16(base))
+		text.LdrshImm64(x(dst), m16)
 	case op.from == a16 && op.signed:
-		text.LdrshImm32(w(dst), arm64asm.Mem16(base))
+		text.LdrshImm32(w(dst), m16)
 	case op.from == a16:
-		text.LdrhImm(w(dst), arm64asm.Mem16(base))
+		text.LdrhImm(w(dst), m16)
 	case op.signed:
-		text.LdrswImm(x(dst), arm64asm.Mem32(base))
+		text.LdrswImm(x(dst), m32)
 	default:
-		text.LdrImm32(w(dst), arm64asm.Mem32(base))
+		text.LdrImm32(w(dst), m32)
+	}
+}
+
+func emitSubStore(text *arm64asm.Section, op subStoreOp, in mir.Instr,
+	x func(mir.VReg) reg.X, w func(mir.VReg) reg.W) {
+
+	base := x(in.Uses[1])
+	v := w(in.Uses[0])
+	m8 := address(arm64asm.Mem8(base), in, 1, op.off, op.indexed, x)
+	m16 := address(arm64asm.Mem16(base), in, 1, op.off, op.indexed, x)
+	m32 := address(arm64asm.Mem32(base), in, 1, op.off, op.indexed, x)
+	if op.indexed {
+		switch op.to {
+		case a8:
+			text.StrbReg(v, m8)
+		case a16:
+			text.StrhReg(v, m16)
+		default:
+			text.StrReg32(v, m32)
+		}
+		return
+	}
+	switch op.to {
+	case a8:
+		text.StrbImm(v, m8)
+	case a16:
+		text.StrhImm(v, m16)
+	default:
+		text.StrImm32(v, m32)
+	}
+}
+
+// emitAddImm is ADD or ADDS by a literal, or SUB or SUBS by its negation:
+// the immediate field is unsigned, and a negative offset is a subtraction.
+func emitAddImm(text *arm64asm.Section, imm int64, wd width, flags bool, in mir.Instr,
+	x func(mir.VReg) reg.X, w func(mir.VReg) reg.W) {
+
+	dst, src := in.Defs[0], in.Uses[0]
+	switch {
+	case flags && wd == w32 && imm < 0:
+		text.SubsImm32(w(dst), w(src), -imm)
+	case flags && wd == w32:
+		text.AddsImm32(w(dst), w(src), imm)
+	case flags && imm < 0:
+		text.SubsImm64(x(dst), x(src), -imm)
+	case flags:
+		text.AddsImm64(x(dst), x(src), imm)
+	case wd == w32 && imm < 0:
+		text.SubImm32(w(dst), w(src), -imm)
+	case wd == w32:
+		text.AddImm32(w(dst), w(src), imm)
+	case imm < 0:
+		text.SubImm64(x(dst), x(src), -imm)
+	default:
+		text.AddImm64(x(dst), x(src), imm)
+	}
+}
+
+func emitShiftImm(text *arm64asm.Section, op shiftImmOp, in mir.Instr,
+	x func(mir.VReg) reg.X, w func(mir.VReg) reg.W) {
+
+	dst, src := in.Defs[0], in.Uses[0]
+	if op.w == w32 {
+		switch op.verb {
+		case ir.VShl:
+			text.LslImm32(w(dst), w(src), op.amount)
+		case ir.VUShr:
+			text.LsrImm32(w(dst), w(src), op.amount)
+		default:
+			text.AsrImm32(w(dst), w(src), op.amount)
+		}
+		return
+	}
+	switch op.verb {
+	case ir.VShl:
+		text.LslImm64(x(dst), x(src), op.amount)
+	case ir.VUShr:
+		text.LsrImm64(x(dst), x(src), op.amount)
+	default:
+		text.AsrImm64(x(dst), x(src), op.amount)
 	}
 }
 

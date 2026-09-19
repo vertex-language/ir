@@ -164,18 +164,39 @@ type (
 	trapOp struct{}
 
 	// loadOp and storeOp are a full-width access through a pointer.
-	loadOp  struct{ w width } // Defs[0] takes [Uses[0]]
-	storeOp struct{ w width } // [Uses[1]] takes Uses[0]
+	//
+	// The address is the base register alone as isel builds them. The
+	// peephole pass folds an addition into the access where the
+	// architecture has a mode for it: `off` is a scaled unsigned
+	// displacement, [Xn, #off], and `indexed` is a register offset,
+	// [Xn, Xm] -- in which case the index is one more Use after the
+	// base. At most one of the two is set.
+	loadOp struct { // Defs[0] takes [Uses[0] (+ off | + Uses[1])]
+		w       width
+		off     int64
+		indexed bool
+	}
+	storeOp struct { // [Uses[1] (+ off | + Uses[2])] takes Uses[0]
+		w       width
+		off     int64
+		indexed bool
+	}
 
 	// extLoadOp carries the memory width and the register width, which on
 	// this architecture is one instruction rather than a load and an extend:
-	// LDRSB and LDRB are different mnemonics.
+	// LDRSB and LDRB are different mnemonics. Its address is loadOp's.
 	extLoadOp struct {
-		from   access
-		signed bool
-		w      width
+		from    access
+		signed  bool
+		w       width
+		off     int64
+		indexed bool
 	}
-	subStoreOp struct{ to access } // the low `to` bytes of Uses[0]
+	subStoreOp struct { // the low `to` bytes of Uses[0]; address as storeOp's
+		to      access
+		off     int64
+		indexed bool
+	}
 
 	// extOp is SXTW, UXTB and their neighbours: a bitfield move that widens.
 	extOp struct {
@@ -199,10 +220,30 @@ type (
 	stackSaveOp    struct{}
 	stackRestoreOp struct{}
 
-	// addImmOp adds a literal to a register. The general path materializes
-	// a constant and adds two registers; this is for the small offsets
-	// §I's list walk moves by, which always fit ADD's immediate.
-	addImmOp struct{ imm int64 }
+	// addImmOp adds a literal to a register: ADD (immediate), or SUB
+	// (immediate) of its negation when imm is negative. isel makes one
+	// for the small offsets §I's list walk moves by, and the peephole
+	// pass makes one wherever a constant's only reader is an add or a
+	// subtract, so that the constant is never materialized.
+	addImmOp struct {
+		imm int64
+		w   width
+	}
+
+	// flagAddImmOp is addImmOp setting NZCV: ADDS or SUBS (immediate),
+	// the §A2 overflow check against a constant.
+	flagAddImmOp struct {
+		imm int64
+		w   width
+	}
+
+	// shiftImmOp is LSL, LSR or ASR by a literal amount, which is what a
+	// shift by a constant and a multiply by a power of two both are.
+	shiftImmOp struct {
+		verb   ir.Verb // VShl, VUShr or VSShr
+		amount uint8
+		w      width
+	}
 
 	// frameOp is an address in this function's own frame, relative to FP.
 	frameOp struct{ off int64 }
@@ -463,7 +504,44 @@ const (
 	condMI // negative — float less-than, false for a NaN
 	condPL // not negative — the negation of MI, true for a NaN
 	condVS // overflow set
+	condVC // overflow clear
 )
+
+// inverse is the condition that holds exactly when c does not: what a branch
+// on c becomes when its two arms trade places. A64 defines every condition
+// but AL and NV in pairs this way, unordered float results included -- MI
+// is false for a NaN and PL true -- so the swap is exact.
+func (c condCode) inverse() condCode {
+	switch c {
+	case condEQ:
+		return condNE
+	case condNE:
+		return condEQ
+	case condLT:
+		return condGE
+	case condGE:
+		return condLT
+	case condLE:
+		return condGT
+	case condGT:
+		return condLE
+	case condLO:
+		return condHS
+	case condHS:
+		return condLO
+	case condLS:
+		return condHI
+	case condHI:
+		return condLS
+	case condMI:
+		return condPL
+	case condPL:
+		return condMI
+	case condVS:
+		return condVC
+	}
+	return condVS
+}
 
 // A barrier is the shareability domain and access kind of a DMB.
 type barrier uint8

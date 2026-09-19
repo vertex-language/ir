@@ -250,11 +250,10 @@ func iselBr(fn *ir.Func, mf *mir.Func, c *cursor, vr *vregs, term *ir.Inst) erro
 
 // iselBrIf lowers a two-way branch.
 //
-// The condition is tested against zero rather than fused into a compare. A
-// fused compare-and-branch is what CBZ and TBZ are and is a peephole this
-// package does not have a pass for; the flags are set by a CMP that isel
-// emitted for the comparison, and reading them back through a value is the
-// shape that always works.
+// The condition is tested against zero rather than fused into a compare:
+// reading the flags back through a value is the shape that always works.
+// The peephole pass fuses the test with the CSET before it, or makes it a
+// CBNZ, afterwards.
 func iselBrIf(fn *ir.Func, mf *mir.Func, c *cursor, vr *vregs, term *ir.Inst) error {
 	cond, ok := vr.lookup(term.Arg(0))
 	if !ok {

@@ -276,8 +276,8 @@ func clobberVReg(pinInt func(reg.X) mir.VReg, pinVec func(reg.V) mir.VReg,
 		// its consumer are emitted as one adjacent pair by iselCompare, and
 		// brif re-tests a value rather than reading flags a predecessor set,
 		// so no flag value is ever live across another instruction for an
-		// asm to destroy. A peephole that fused a compare into a branch
-		// would end that, and would have to model flags to do it.
+		// asm to destroy. The peephole pass keeps it so: it fuses a compare
+		// into a branch only when the two are adjacent.
 		return -1, nil
 	}
 

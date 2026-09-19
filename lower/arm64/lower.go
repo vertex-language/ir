@@ -82,7 +82,8 @@ import (
 	"github.com/vertex-language/ir/lower/regalloc"
 )
 
-// OptLevel is how hard Lower tries. Only O0 exists today.
+// OptLevel is how hard Lower tries. Only O0 exists today, and it already
+// promotes frame slots (ir.PromoteSlots) and runs the peephole pass.
 type OptLevel uint8
 
 const O0 OptLevel = iota
@@ -257,6 +258,11 @@ func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Op
 		return nil
 	}
 
+	// Locals a frontend put in frame slots and never took the address of
+	// become registers before the frame is planned, so that they take no
+	// frame space and cost no load or store. See ir.PromoteSlots.
+	fn.PromoteSlots()
+
 	fr, err := planFrame(fn, opts)
 	if err != nil {
 		return err
@@ -327,10 +333,14 @@ func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Op
 		}
 	}
 
+	peephole(mf)
+
 	assigned, err := regalloc.Spilling(mf, pool, &spiller{fr: fr})
 	if err != nil {
 		return fmt.Errorf("lower: %s: regalloc: %w", fn.Name(), err)
 	}
+	shortcutJumps(mf, assigned, jumpRoots(mf))
+	layoutBlocks(mf)
 
 	sv := planSaves(fn, pool, assigned)
 	fr.reserveSaves(sv.x, sv.v)

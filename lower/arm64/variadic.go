@@ -153,6 +153,6 @@ func vaCursor(c *cursor, vr *vregs, ap mir.VReg) mir.VReg {
 // vaAdvance moves it on by n bytes and writes it back.
 func vaAdvance(c *cursor, vr *vregs, ap, cur mir.VReg, n int64) {
 	next := vr.temp(w64)
-	c.Emit(mir.Instr{Op: addImmOp{imm: n}, Defs: []mir.VReg{next}, Uses: []mir.VReg{cur}})
+	c.Emit(mir.Instr{Op: addImmOp{imm: n, w: w64}, Defs: []mir.VReg{next}, Uses: []mir.VReg{cur}})
 	c.Emit(mir.Instr{Op: storeOp{w: w64}, Uses: []mir.VReg{next, ap}})
 }

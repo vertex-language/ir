@@ -223,9 +223,10 @@ func iselUnary(c *cursor, vr *vregs, in *ir.Inst) error {
 // iselCompare lowers §B: a compare that sets the flags, then a CSET that reads
 // them into a register.
 //
-// Always materialized, never fused into the branch that reads it. §B's result
-// is an i1 value and a value has to exist; folding the pair away when its only
-// reader is a brif is a peephole, and this package has nowhere to put one.
+// Always materialized here: §B's result is an i1 value and a value has to
+// exist. Folding the pair away when its only reader is the brif at once
+// after it is the peephole pass's (see peephole.go), which sees the
+// neighbours isel does not.
 func iselCompare(c *cursor, vr *vregs, in *ir.Inst, cond condCode) error {
 	ops, err := operands(vr, in, 2)
 	if err != nil {
