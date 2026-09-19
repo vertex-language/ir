@@ -262,6 +262,11 @@ func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Op
 	// become registers before the frame is planned, so that they take no
 	// frame space and cost no load or store. See ir.PromoteSlots.
 	fn.PromoteSlots()
+	// Then a value computed twice is computed once: the joins && and ||
+	// lower to are threaded away, and repeated loads, bounds checks and
+	// tests whose answer is known are dropped. See ir/lvn.go.
+	fn.ThreadJoins()
+	fn.NumberValues()
 
 	fr, err := planFrame(fn, opts)
 	if err != nil {
