@@ -108,8 +108,39 @@ func (f *Func) slotUses() map[*Def][]Use {
 
 type slotAccess struct {
 	typ           RegType
+	width         uint64 // bytes of a sub-width slot (store8 and uload8, say); 0 for full width
 	loads, stores []*Inst
 	of            map[*Inst]bool
+}
+
+// accessWidth is the bytes a memory verb moves, and whether a load sign-
+// extends them; 0 for a full-width load or store.
+func accessWidth(v Verb) (width uint64, signed, load, ok bool) {
+	switch v {
+	case VLoad:
+		return 0, false, true, true
+	case VStore:
+		return 0, false, false, true
+	case VULoad8:
+		return 1, false, true, true
+	case VULoad16:
+		return 2, false, true, true
+	case VULoad32:
+		return 4, false, true, true
+	case VSLoad8:
+		return 1, true, true, true
+	case VSLoad16:
+		return 2, true, true, true
+	case VSLoad32:
+		return 4, true, true, true
+	case VStore8:
+		return 1, false, false, true
+	case VStore16:
+		return 2, false, false, true
+	case VStore32:
+		return 4, false, false, true
+	}
+	return 0, false, false, false
 }
 
 func slotAccessesOf(alloc *Inst, uses []Use) (slotAccess, bool) {
@@ -121,21 +152,25 @@ func slotAccessesOf(alloc *Inst, uses []Use) (slotAccess, bool) {
 		if u.Target >= 0 || in.im != nil && in.im.volatile {
 			return acc, false
 		}
-		var t RegType
+		width, _, load, ok := accessWidth(in.op.Verb)
+		if !ok {
+			return acc, false
+		}
 		switch {
-		case in.op.Verb == VLoad && u.Index == 0:
-			t = in.op.Type
+		case load && u.Index == 0:
 			acc.loads = append(acc.loads, in)
-		case in.op.Verb == VStore && u.Index == 1 && in.args[0] != addr:
-			t = in.op.Type
+		case !load && u.Index == 1 && in.args[0] != addr:
 			acc.stores = append(acc.stores, in)
 		default:
 			return acc, false
 		}
-		if typed && t != acc.typ {
+		// One register type and one width for every access: a slot
+		// written as a byte and read as a word is memory, not a value.
+		t := in.op.Type
+		if typed && (t != acc.typ || width != acc.width) {
 			return acc, false
 		}
-		acc.typ, typed = t, true
+		acc.typ, acc.width, typed = t, width, true
 		acc.of[in] = true
 	}
 	return acc, typed
@@ -239,10 +274,11 @@ func appendBlockOnce(bs []*Block, b *Block) []*Block {
 // removed load is replaced by, and the zero each type's undefined reads
 // take.
 type promotion struct {
-	f     *Func
-	repl  map[*Def]*Def
-	zeros map[RegType]*Def
-	dead  []*Inst
+	f       *Func
+	repl    map[*Def]*Def
+	zeros   map[RegType]*Def
+	dead    []*Inst
+	inserts []insertion
 }
 
 // zero is a constant zero of type t at the top of the entry block.
@@ -260,6 +296,53 @@ func (p *promotion) zero(t RegType) *Def {
 	p.f.entry.insts = append([]*Inst{in}, p.f.entry.insts...)
 	p.zeros[t] = d
 	return d
+}
+
+// narrow is what a sub-width load of the slot reads, given the value last
+// stored whole: its low bytes, zero- or sign-extended as the load would
+// have. The instructions that do it are placed before the load once the
+// walk is done (see finish); a full-width load reads the value itself.
+func (p *promotion) narrow(b *Block, load *Inst, v *Def, acc slotAccess) *Def {
+	if acc.width == 0 {
+		return v
+	}
+	_, signed, _, _ := accessWidth(load.op.Verb)
+	t := acc.typ
+	bits := int64(32)
+	if t == TypeI64 {
+		bits = 64
+	}
+	keep := int64(acc.width) * 8
+	mk := func(op Op, args []*Def, im *imm) *Def {
+		in := &Inst{op: op, blk: b, args: args, im: im}
+		d := p.f.newDef(t, "", in, 0)
+		in.results = []*Def{d}
+		p.inserts = append(p.inserts, insertion{before: load, in: in})
+		return d
+	}
+	konst := func(c int64) *Def {
+		return mk(Op{t, VConst}, nil, &imm{lit: Int(c), hasLit: true})
+	}
+	if !signed {
+		mask := int64(1)<<uint(keep) - 1
+		return mk(Op{t, VAnd}, []*Def{v, konst(mask)}, nil)
+	}
+	sh := konst(bits - keep)
+	up := mk(Op{t, VShl}, []*Def{v, sh}, nil)
+	return mk(Op{t, VSShr}, []*Def{up, sh}, nil)
+}
+
+// isSlotStore reports whether in, an access of a promotable slot, writes
+// it -- whole or a low part.
+func isSlotStore(in *Inst) bool {
+	_, _, load, ok := accessWidth(in.op.Verb)
+	return ok && !load
+}
+
+// An insertion is an instruction to place before another once the walk
+// that made it is done.
+type insertion struct {
+	before, in *Inst
 }
 
 // promote plans the promotion of one slot and carries it out, or reports
@@ -280,7 +363,7 @@ func (p *promotion) promote(g *promoteCFG, alloc *Inst, acc slotAccess) bool {
 			if !acc.of[in] {
 				continue
 			}
-			if in.op.Verb == VStore {
+			if isSlotStore(in) {
 				stores[b] = true
 			} else if first {
 				upLoad[b] = true
@@ -364,14 +447,14 @@ func (p *promotion) promote(g *promoteCFG, alloc *Inst, acc slotAccess) bool {
 			if !acc.of[in] {
 				continue
 			}
-			if in.op.Verb == VStore {
+			if isSlotStore(in) {
 				cur = in.args[0]
 				continue
 			}
 			if cur == nil {
 				cur = p.zero(acc.typ)
 			}
-			p.repl[in.results[0]] = cur
+			p.repl[in.results[0]] = p.narrow(b, in, cur, acc)
 		}
 		if b.term != nil && b.term.im != nil {
 			for i := range b.term.im.targets {
@@ -428,6 +511,15 @@ func passesArgs(term *Inst, d *Block) bool {
 // chains, since a store may have stored another promoted slot's load --
 // and deletes the slots and their accesses.
 func (p *promotion) finish() {
+	for _, x := range p.inserts {
+		b := x.before.blk
+		for i, in := range b.insts {
+			if in == x.before {
+				b.insts = append(b.insts[:i], append([]*Inst{x.in}, b.insts[i:]...)...)
+				break
+			}
+		}
+	}
 	resolve := func(d *Def) *Def {
 		for n := 0; n <= len(p.repl); n++ {
 			r, ok := p.repl[d]

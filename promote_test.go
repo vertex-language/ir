@@ -127,3 +127,42 @@ func TestPromoteUninitializedOnOnePath(t *testing.T) {
 		t.Errorf("the branches into join do not pass the value on each path:\n%s", got)
 	}
 }
+
+// A byte slot -- a C++ bool or char -- stored as the low byte of an i32 and
+// read back zero- or sign-extended becomes the value masked or shifted the
+// same way.
+func TestPromoteSubWidth(t *testing.T) {
+	m := ir.NewModule("t", ir.AArch64Linux)
+	fn := m.Func("f").Export()
+	c := fn.ParamI32("c")
+	fn.ReturnsI32()
+	entry := fn.Entry()
+	set := fn.Block("set")
+	join := fn.Block("join")
+	x := entry.Ptr.Alloc(1, 1)
+	entry.I32.Store8(entry.I32.Const(0x1ff), x)
+	entry.BrIf(entry.I32.Ne(c, entry.I32.Const(0)), set.To(), join.To())
+	set.I32.Store8(set.I32.Const(0x80), x)
+	set.Br(join.To())
+	u := join.I32.ULoad8(x)
+	s := join.I32.SLoad8(x)
+	join.Return(join.I32.Add(u, s))
+	if err := m.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if n := fn.PromoteSlots(); n != 1 {
+		t.Fatalf("promoted %d slots, want 1", n)
+	}
+	if err := verify.Module(m); err != nil {
+		t.Fatalf("verify: %v\n%s", err, printedIR(t, m))
+	}
+	got := printedIR(t, m)
+	for _, want := range []string{"i32.and", "i32.shl", "i32.sshr"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no %s:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "store8") || strings.Contains(got, "load8") {
+		t.Errorf("the slot survived:\n%s", got)
+	}
+}
