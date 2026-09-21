@@ -100,9 +100,11 @@ const O0 OptLevel = iota
 type VariadicABI uint8
 
 const (
-	// VariadicAAPCS64 is the base standard's. Not implemented: it needs
-	// the register save area in the prologue and the two-region walk in
-	// va_arg, neither of which is written.
+	// VariadicAAPCS64 is the base standard's, used on Linux and Android.
+	// Calls to variadic functions are supported: the caller places a
+	// variadic argument as it would a named one. Defining one is not yet:
+	// va_start needs the register save area in the prologue and va_arg the
+	// two-region walk, neither of which is written.
 	VariadicAAPCS64 VariadicABI = iota
 
 	// VariadicDarwin is Apple's variant. Every variadic argument occupies

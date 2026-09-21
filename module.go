@@ -101,6 +101,15 @@ var (
 		ABI: "aapcs", Endian: LittleEndian, PtrBits: 64, StackAlign: 16,
 		ExtFloat: []RegType{TypeF128}, Vector: true,
 	})
+	// Android's arm64 is the base AAPCS64 on ELF, the same layout as
+	// Linux: long double is binary128. It is a target of its own because
+	// the two differ above the layout -- bionic rather than glibc, the
+	// dynamic linker at /system/bin/linker64, native code loaded as shared
+	// objects -- and everything past lowering has to be able to tell.
+	AArch64Android = NewTarget("aarch64/android", Layout{
+		ABI: "aapcs", Endian: LittleEndian, PtrBits: 64, StackAlign: 16,
+		ExtFloat: []RegType{TypeF128}, Vector: true,
+	})
 	X86_64MacOS = NewTarget("x86_64/macos", Layout{
 		ABI: "sysv", Endian: LittleEndian, PtrBits: 64, StackAlign: 16,
 		ExtFloat: []RegType{TypeF80}, Vector: true,

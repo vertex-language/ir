@@ -284,16 +284,19 @@ func callPlaces(in *ir.Inst, opts Options) ([]place, error) {
 
 // classifyCall places a call's arguments, honouring the variadic cut.
 //
+// Under the base standard there is no cut for the caller: an argument past
+// the last named one is placed exactly as a named one would be, in the next
+// free register of its file or else on the stack (AAPCS64 §6.4.2). The work
+// is the callee's -- va_start spills the argument registers to a save area --
+// so a call to printf is an ordinary call.
+//
 // Under Apple's variant every argument past the last named one goes on the
 // stack whatever its type, one eight-byte slot each, continuing from wherever
 // the named arguments left the stack. The named ones are placed exactly as
 // they would be in a non-variadic call.
 func classifyCall(args []abiArg, named int, variadic bool, abi VariadicABI, sret ir.FType) ([]place, error) {
-	if !variadic {
+	if !variadic || abi != VariadicDarwin {
 		return classifyAAPCS(args, sret, abi == VariadicDarwin)
-	}
-	if abi != VariadicDarwin {
-		return nil, fmt.Errorf("a variadic call needs a variadic convention; Options.Variadic names the base standard's, which is not implemented")
 	}
 
 	head, err := classifyAAPCS(args[:named], sret, true)
