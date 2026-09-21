@@ -101,6 +101,13 @@ func structLayout(t *ir.Type, depth int) ([]uint64, uint64, uint64, error) {
 			end = at + size
 		}
 	}
+	// A declared alignment raises the natural one: a 16-byte-aligned pair of
+	// words -- a 128-bit integer, a struct written _Alignas(16) -- goes to
+	// the next 16-byte boundary as a stack argument, where AAPCS64's
+	// C.14 rounds the NSAA up to the argument's alignment.
+	if a := t.AlignAttr(); a > align {
+		align = a
+	}
 	return offsets, alignUp(end, align), align, nil
 }
 
@@ -117,6 +124,9 @@ func unionSizeAlign(t *ir.Type, depth int) (uint64, uint64, error) {
 		if a > align {
 			align = a
 		}
+	}
+	if a := t.AlignAttr(); a > align {
+		align = a
 	}
 	return alignUp(size, align), align, nil
 }
