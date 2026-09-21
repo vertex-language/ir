@@ -82,6 +82,15 @@ func (m *Module) MetaDecl(name string, args ...MetaArg) *MetaDecl {
 // LookupMeta resolves a metadata name.
 func (m *Module) LookupMeta(name string) *MetaDecl { return m.metas[name] }
 
+// AttachObjCReturnMarker, on a call, asks for the Objective-C runtime's
+// return-value marker straight after it: on AArch64 `mov x29, x29`, which
+// objc_autoreleaseReturnValue looks for at its caller's return address and,
+// finding it, hands the object over without the autorelease that the
+// objc_retainAutoreleasedReturnValue following the call would undo. A
+// backend with no such marker ignores it; x86-64's is the move of the result
+// into the next call's first argument, which happens anyway.
+const AttachObjCReturnMarker = "objc_return_marker"
+
 // An Attach is metadata attached to an instruction, terminator, block header,
 // type declaration, global declaration, import, or function definition.
 type Attach struct {

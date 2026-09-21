@@ -335,8 +335,13 @@ type (
 	// it runs.
 	tailIndOp struct{}
 
-	// callOp names the callee, with arguments and clobbers pinned.
-	callOp struct{ sym string }
+	// callOp names the callee, with arguments and clobbers pinned. marker
+	// asks for the Objective-C return marker after the BL; see
+	// ir.AttachObjCReturnMarker.
+	callOp struct {
+		sym    string
+		marker bool
+	}
 
 	// asmOp is §G4's inline assembly: a template, the references found in
 	// it, and the vreg standing for each operand. It reaches emit as text
@@ -355,7 +360,7 @@ type (
 	// target is a Use rather than a pinned register: every caller-saved
 	// register is a destination of the call, so the one register the
 	// address may not be in is any of those.
-	callIndOp struct{}
+	callIndOp struct{ marker bool }
 
 	// symAddrOp is ADRP plus ADD: a symbol's address in two instructions,
 	// which is how a 64-bit address reaches a register when every

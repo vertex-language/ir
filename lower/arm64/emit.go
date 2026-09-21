@@ -256,9 +256,15 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 
 			case callOp:
 				text.Bl(arm64asm.Ref(op.sym, arm64asm.RefCall26))
+				if op.marker {
+					text.Inst(objcReturnMarker)
+				}
 
 			case callIndOp:
 				text.Blr(x(in.Uses[0]))
+				if op.marker {
+					text.Inst(objcReturnMarker)
+				}
 
 			case tailOp:
 				emitTeardown(text, fr, sv, carried(in, x))
@@ -1510,3 +1516,9 @@ func emitArgStore(text *arm64asm.Section, op argStoreOp, in mir.Instr,
 		text.StrImm64(x(in.Uses[0]), arm64asm.Mem64(reg.SP).Off(op.off))
 	}
 }
+
+// objcReturnMarker is `mov x29, x29`, the word objc4's
+// callerAcceptsOptimizedReturn compares its caller's return address with.
+// Written as the word and not through MovReg64, so that no choice of alias
+// encoding can change what the runtime reads.
+const objcReturnMarker uint32 = 0xAA1D03FD

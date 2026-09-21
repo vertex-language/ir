@@ -59,7 +59,7 @@ func iselInvoke(fn *ir.Func, mf *mir.Func, c *cursor, vr *vregs, plan *ehPlan,
 		target := vr.temp(w64)
 		emitCopy(c, target, addr, w64)
 		extraUses = []mir.VReg{target}
-		what, op, args = "invokeind", callIndOp{}, term.Args()[1:]
+		what, op, args = "invokeind", callIndOp{marker: wantsReturnMarker(term)}, term.Args()[1:]
 		if t := term.NamedType(); t != nil {
 			sig = t.Sig()
 		}
@@ -68,7 +68,7 @@ func iselInvoke(fn *ir.Func, mf *mir.Func, c *cursor, vr *vregs, plan *ehPlan,
 		if sym == nil {
 			return fmt.Errorf("invoke: no callee named")
 		}
-		what, op, args = "invoke @"+sym.Name(), callOp{sym: sym.Name()}, term.Args()
+		what, op, args = "invoke @"+sym.Name(), callOp{sym: sym.Name(), marker: wantsReturnMarker(term)}, term.Args()
 		if callee := term.Callee(); callee != nil {
 			sig = callee.Signature()
 		}

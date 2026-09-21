@@ -573,7 +573,19 @@ func iselCall(c *cursor, vr *vregs, in *ir.Inst, opts Options) error {
 	if callee := in.Callee(); callee != nil {
 		sig = callee.Signature()
 	}
-	return iselCallSeq(c, vr, what, sig, in.Args(), in.Results(), nil, callOp{sym: sym.Name()}, opts)
+	return iselCallSeq(c, vr, what, sig, in.Args(), in.Results(), nil,
+		callOp{sym: sym.Name(), marker: wantsReturnMarker(in)}, opts)
+}
+
+// wantsReturnMarker reports whether a call asked for the Objective-C
+// return marker after it.
+func wantsReturnMarker(in *ir.Inst) bool {
+	for _, a := range in.Attached() {
+		if a.Name == ir.AttachObjCReturnMarker {
+			return true
+		}
+	}
+	return false
 }
 
 // iselTailCall lowers a call that replaces this frame with the callee's.
@@ -669,7 +681,8 @@ func iselCallInd(c *cursor, vr *vregs, in *ir.Inst, opts Options) error {
 	if t := in.NamedType(); t != nil {
 		sig = t.Sig()
 	}
-	return iselCallSeq(c, vr, "callind", sig, in.Args()[1:], in.Results(), []mir.VReg{target}, callIndOp{}, opts)
+	return iselCallSeq(c, vr, "callind", sig, in.Args()[1:], in.Results(), []mir.VReg{target},
+		callIndOp{marker: wantsReturnMarker(in)}, opts)
 }
 
 // iselCallSeq is the body every call form shares: the arguments into the
