@@ -253,6 +253,10 @@ type (
 	frameLoadOp struct {
 		off int64
 		w   width
+		// narrow loads that many bytes and extends them, signed or not:
+		// a packed stack parameter of one or two bytes.
+		narrow uint8
+		signed bool
 	}
 	frameStoreOp struct {
 		off int64
@@ -265,6 +269,10 @@ type (
 	argStoreOp struct {
 		off int64
 		w   width
+		// narrow stores only that many bytes: a packed stack argument
+		// of one or two, which a four-byte store would run into the
+		// next argument with.
+		narrow uint8
 	}
 
 	// outArgAddrOp is the address of a place in the outgoing area, for an
@@ -620,6 +628,11 @@ type place struct {
 	byval ir.FType
 	size  uint64
 	align uint64
+
+	// narrow is the byte width of a packed char, short or bool on the
+	// stack, and nsigned its sign; zero for a full-width value.
+	narrow  uint8
+	nsigned bool
 }
 
 // isAggregate reports whether this place carries bytes rather than a value.

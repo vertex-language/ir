@@ -783,7 +783,7 @@ func emitCallSeq(c *cursor, vr *vregs, places []place,
 			}
 			continue
 		}
-		c.Emit(mir.Instr{Op: argStoreOp{off: pl.off, w: pl.w}, Uses: []mir.VReg{srcs[i]}})
+		c.Emit(mir.Instr{Op: argStoreOp{off: pl.off, w: pl.w, narrow: pl.narrow}, Uses: []mir.VReg{srcs[i]}})
 	}
 
 	site := newCallSite(vr)

@@ -210,6 +210,10 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 				emitFrameAddr(text, x(in.Defs[0]), fr.local(op.off))
 
 			case frameLoadOp:
+				if op.narrow != 0 {
+					emitNarrowFrameLoad(text, op, fr.local(op.off), in, w)
+					break
+				}
 				emitFrameLoad(text, op.w, fr.local(op.off), in, x, w, d, s)
 
 			case spillOp:
@@ -1505,6 +1509,14 @@ func emitArgStore(text *arm64asm.Section, op argStoreOp, in mir.Instr,
 	x func(mir.VReg) reg.X, w func(mir.VReg) reg.W,
 	d func(mir.VReg) reg.D, s func(mir.VReg) reg.S) {
 
+	switch {
+	case op.narrow == 1:
+		text.StrbImm(w(in.Uses[0]), arm64asm.Mem8(reg.SP).Off(op.off))
+		return
+	case op.narrow == 2:
+		text.StrhImm(w(in.Uses[0]), arm64asm.Mem16(reg.SP).Off(op.off))
+		return
+	}
 	switch op.w {
 	case wf32:
 		text.StrImmS(s(in.Uses[0]), arm64asm.Mem32(reg.SP).Off(op.off))
@@ -1522,3 +1534,22 @@ func emitArgStore(text *arm64asm.Section, op argStoreOp, in mir.Instr,
 // Written as the word and not through MovReg64, so that no choice of alias
 // encoding can change what the runtime reads.
 const objcReturnMarker uint32 = 0xAA1D03FD
+
+// emitNarrowFrameLoad reads a packed one- or two-byte stack parameter into a
+// W register, extended as its type's sign says.
+func emitNarrowFrameLoad(text *arm64asm.Section, op frameLoadOp, off int64, in mir.Instr,
+	w func(mir.VReg) reg.W) {
+
+	b, o := frameBase(text, off)
+	dst := w(in.Defs[0])
+	switch {
+	case op.narrow == 1 && op.signed:
+		text.LdrsbImm32(dst, arm64asm.Mem8(b).Off(o))
+	case op.narrow == 1:
+		text.LdrbImm(dst, arm64asm.Mem8(b).Off(o))
+	case op.signed:
+		text.LdrshImm32(dst, arm64asm.Mem16(b).Off(o))
+	default:
+		text.LdrhImm(dst, arm64asm.Mem16(b).Off(o))
+	}
+}

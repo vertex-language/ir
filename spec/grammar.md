@@ -296,6 +296,7 @@ abs-param          ::= register? reg-type param-attr*
 param-attr         ::= "byval" TypeName | "sret" TypeName
                      | "zext" | "sext" | "noalias"
                      | "swiftself" | "swiftasync" | "swiftindirect"
+                     | "narrow8s" | "narrow8u" | "narrow16s" | "narrow16u"
 
 ret                ::= reg-type ret-attr*
                      | "(" ret-item ( "," ret-item )* ")"

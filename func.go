@@ -1,6 +1,8 @@
 // func.go
 package ir
 
+import "strconv"
+
 // A CallConv is §6's callconv. The zero value is CCC, which is the abi named in
 // the module's layout block — a module has no convention-free default.
 type CallConv uint8
@@ -51,6 +53,7 @@ const (
 	paSwiftError
 	paSwiftOut
 	paSwiftAsync
+	paNarrow
 )
 
 // A ParamAttr is a param-attr or a ret-attr (§6). ZExt and SExt are the two a
@@ -58,6 +61,10 @@ const (
 type ParamAttr struct {
 	kind paKind
 	typ  *Type
+
+	// For Narrow: the source type's size in bytes, and its signedness.
+	bytes  uint8
+	signed bool
 }
 
 var (
@@ -131,6 +138,26 @@ var (
 	SwiftAsync = ParamAttr{kind: paSwiftAsync}
 )
 
+// Narrow says an i32 parameter is a source-language integer of one or two
+// bytes -- a C char, short or bool -- which is a fact the register type does
+// not carry and a calling convention may need. Apple's arm64 packs a stack
+// argument at its own size and alignment: a bool takes one byte and the int
+// after it the next four-byte boundary, where the base AAPCS64 gives each an
+// eightbyte. The caller stores exactly that many bytes and the callee loads
+// them extended as signed says. A convention with no such packing ignores it;
+// in a register the value is extended to 32 bits either way.
+func Narrow(bytes int, signed bool) ParamAttr {
+	return ParamAttr{kind: paNarrow, bytes: uint8(bytes), signed: signed}
+}
+
+// NarrowWidth reports a Narrow attribute's size and signedness.
+func (a ParamAttr) NarrowWidth() (bytes int, signed, ok bool) {
+	if a.kind != paNarrow {
+		return 0, false, false
+	}
+	return int(a.bytes), a.signed, true
+}
+
 // ByVal passes the aggregate the pointer names by value.
 func ByVal(t *Type) ParamAttr { return ParamAttr{kind: paByVal, typ: t} }
 
@@ -181,6 +208,12 @@ func (a ParamAttr) String() string {
 		return "swiftindirect"
 	case paSwiftAsync:
 		return "swiftasync"
+	case paNarrow:
+		s := "narrow" + strconv.Itoa(8*int(a.bytes))
+		if a.signed {
+			return s + "s"
+		}
+		return s + "u"
 	}
 	return ""
 }

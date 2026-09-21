@@ -16,6 +16,10 @@ import (
 // owns is below. Locals are addressed as a negative displacement from X29, the
 // way they are from RBP on the other architecture.
 type frame struct {
+	// apple is Apple's arm64 variant, whose stack arguments are packed.
+	// See classifyAAPCS.
+	apple bool
+
 	// next is how many bytes below X29 are spoken for. A running total
 	// rather than a final size, because spilling adds to it.
 	next uint64
@@ -141,14 +145,15 @@ func (f *frame) reserveSaves(regs []reg.X, vecs []reg.V) {
 func planFrame(fn *ir.Func, opts Options) (*frame, error) {
 	fr := &frame{slot: map[*ir.Inst]int64{}}
 
-	if places, err := classifyAAPCS(paramArgs(fn), sretParamType(fn)); err == nil {
+	fr.apple = opts.Variadic == VariadicDarwin
+	if places, err := classifyAAPCS(paramArgs(fn), sretParamType(fn), fr.apple); err == nil {
 		fr.force = usesStack(places)
 		// A variadic function's list starts after whatever its named
 		// parameters put on the stack, which under Apple's variant is
 		// the only place a variadic argument ever is.
 		if sig := fn.Signature(); sig != nil && sig.IsVariadic() {
 			fr.variadic = true
-			fr.vaOffset = int64(stackEnd(places))
+			fr.vaOffset = int64(alignUp(stackEnd(places), 8))
 			fr.force = true
 		}
 	}
@@ -285,20 +290,22 @@ func callPlaces(in *ir.Inst, opts Options) ([]place, error) {
 // they would be in a non-variadic call.
 func classifyCall(args []abiArg, named int, variadic bool, abi VariadicABI, sret ir.FType) ([]place, error) {
 	if !variadic {
-		return classifyAAPCS(args, sret)
+		return classifyAAPCS(args, sret, abi == VariadicDarwin)
 	}
 	if abi != VariadicDarwin {
 		return nil, fmt.Errorf("a variadic call needs a variadic convention; Options.Variadic names the base standard's, which is not implemented")
 	}
 
-	head, err := classifyAAPCS(args[:named], sret)
+	head, err := classifyAAPCS(args[:named], sret, true)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]place, 0, len(args))
 	out = append(out, head...)
 
-	off := int64(stackEnd(head))
+	// The tail's eightbyte slots start at the next eightbyte after the
+	// named arguments, which Apple's packing may have left at any byte.
+	off := int64(alignUp(stackEnd(head), 8))
 	for _, a := range args[named:] {
 		if !a.byval.IsZero() {
 			// An aggregate in the variadic tail would have to be copied
@@ -400,7 +407,12 @@ func alignUp(n, a uint64) uint64 {
 // the same shape SysV has. What differs is the count — eight of each file
 // rather than six and eight — and that a stack argument is packed to its own
 // size rather than given a whole eightbyte.
-func classifyAAPCS(args []abiArg, sret ir.FType) ([]place, error) {
+//
+// apple selects Apple's variant, which differs in one respect that matters
+// here: a scalar stack argument is packed at its own size and alignment -- a
+// bool is one byte, an int four at the next four-byte boundary -- where the
+// base standard gives every one a doubleword. Aggregates keep the base rule.
+func classifyAAPCS(args []abiArg, sret ir.FType, apple bool) ([]place, error) {
 	var ints, floats int
 	var stackBytes uint64
 	out := make([]place, len(args))
@@ -412,6 +424,13 @@ func classifyAAPCS(args []abiArg, sret ir.FType) ([]place, error) {
 		stackBytes = alignUp(stackBytes, align)
 		p := place{kind: placeStack, off: int64(stackBytes)}
 		stackBytes += alignUp(size, 8)
+		return p
+	}
+	// A scalar under Apple's packing: its own size, its own alignment.
+	toStackPacked := func(size uint64) place {
+		stackBytes = alignUp(stackBytes, size)
+		p := place{kind: placeStack, off: int64(stackBytes), size: size}
+		stackBytes += size
 		return p
 	}
 
@@ -480,6 +499,20 @@ func classifyAAPCS(args []abiArg, sret ir.FType) ([]place, error) {
 			case !w.isFloat() && ints < len(aapcsIntArgs):
 				out[i] = place{kind: placeInt, i: ints, w: w}
 				ints++
+			case apple:
+				size := uint64(8)
+				switch {
+				case a.narrow != 0 && w == w32:
+					size = uint64(a.narrow)
+				case w == w32 || w == wf32:
+					size = 4
+				}
+				p := toStackPacked(size)
+				p.w = w
+				if a.narrow != 0 && w == w32 {
+					p.narrow, p.nsigned = a.narrow, a.nsigned
+				}
+				out[i] = p
 			default:
 				p := toStack(8, 8)
 				p.w = w
@@ -564,6 +597,10 @@ type abiArg struct {
 	// out is the indirect-result pointer, which goes in X8 by
 	// declaration rather than by size. See ir.SwiftIndirectResult.
 	out bool
+	// narrow is the source type's size for an i32 that is really a char,
+	// short or bool, and nsigned its sign; zero otherwise. See ir.Narrow.
+	narrow  uint8
+	nsigned bool
 }
 
 // scalarArgs is a list of register types with no byval among them.
@@ -609,6 +646,16 @@ func selfOf(attrs []ir.ParamAttr) bool {
 	return false
 }
 
+// narrowOf reads an ir.Narrow attribute.
+func narrowOf(attrs []ir.ParamAttr) (uint8, bool) {
+	for _, a := range attrs {
+		if n, signed, ok := a.NarrowWidth(); ok {
+			return uint8(n), signed
+		}
+	}
+	return 0, false
+}
+
 func byvalOf(attrs []ir.ParamAttr) ir.FType {
 	for _, a := range attrs {
 		if a.IsByVal() && a.Type() != nil {
@@ -634,6 +681,7 @@ func paramArgs(fn *ir.Func) []abiArg {
 			out[i].self = selfOf(ps[i].Attrs)
 			out[i].async = asyncOf(ps[i].Attrs)
 			out[i].out = outOf(ps[i].Attrs)
+			out[i].narrow, out[i].nsigned = narrowOf(ps[i].Attrs)
 		}
 	}
 	return out
@@ -660,6 +708,7 @@ func sigArgSpec(sig *ir.Sig, args []*ir.Def) []abiArg {
 			out[i].self = selfOf(ps[i].Attrs)
 			out[i].async = asyncOf(ps[i].Attrs)
 			out[i].out = outOf(ps[i].Attrs)
+			out[i].narrow, out[i].nsigned = narrowOf(ps[i].Attrs)
 		}
 	}
 	return out
@@ -696,6 +745,9 @@ func stackBytesOf(p place) uint64 {
 	if p.isAggregate() {
 		return alignUp(p.size, 8)
 	}
+	if p.size != 0 {
+		return p.size // packed, under Apple's variant
+	}
 	return 8
 }
 
@@ -706,7 +758,7 @@ func outgoingBytes(places []place) uint64 {
 // classifyParams copies fn's parameters out of the registers they arrived in
 // and into vregs the allocator is free to place.
 func classifyParams(fn *ir.Func, entry *mir.Block, vr *vregs, fr *frame) error {
-	places, err := classifyAAPCS(paramArgs(fn), sretParamType(fn))
+	places, err := classifyAAPCS(paramArgs(fn), sretParamType(fn), fr.apple)
 	if err != nil {
 		return fmt.Errorf("lower: %s: %w", fn.Name(), err)
 	}
@@ -723,7 +775,7 @@ func classifyParams(fn *ir.Func, entry *mir.Block, vr *vregs, fr *frame) error {
 		}
 		if pl.kind == placeStack {
 			entry.Emit(mir.Instr{
-				Op:   frameLoadOp{off: stackParamOff(pl.off), w: pl.w},
+				Op:   frameLoadOp{off: stackParamOff(pl.off), w: pl.w, narrow: pl.narrow, signed: pl.nsigned},
 				Defs: []mir.VReg{v},
 			})
 			continue
