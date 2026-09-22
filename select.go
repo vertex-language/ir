@@ -20,6 +20,10 @@ func (n I64NS) Select(c I1, a, b I64) I64 {
 	return I64{n.b.def1(Op{TypeI64, VSelect}, TypeI64, c.d, a.d, b.d)}
 }
 
+func (n I128NS) Select(c I1, a, b I128) I128 {
+	return I128{n.b.def1(Op{TypeI128, VSelect}, TypeI128, c.d, a.d, b.d)}
+}
+
 func (n F32NS) Select(c I1, a, b F32) F32 {
 	return F32{n.b.def1(Op{TypeF32, VSelect}, TypeF32, c.d, a.d, b.d)}
 }

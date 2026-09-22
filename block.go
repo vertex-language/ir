@@ -214,6 +214,9 @@ func (b *Block) Param(t RegType, name string) Value { return Wrap(b.blockParam(t
 func (b *Block) ParamI1(name string) I1   { return I1{b.blockParam(TypeI1, name)} }
 func (b *Block) ParamI32(name string) I32 { return I32{b.blockParam(TypeI32, name)} }
 func (b *Block) ParamI64(name string) I64 { return I64{b.blockParam(TypeI64, name)} }
+func (b *Block) ParamI128(name string) I128 {
+	return I128{b.blockParam(TypeI128, name)}
+}
 func (b *Block) ParamF32(name string) F32 { return F32{b.blockParam(TypeF32, name)} }
 func (b *Block) ParamF64(name string) F64 { return F64{b.blockParam(TypeF64, name)} }
 func (b *Block) ParamF80(name string) F80 { return F80{b.blockParam(TypeF80, name)} }

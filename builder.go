@@ -11,12 +11,13 @@ package ir
 type Builder struct {
 	blk *Block
 
-	I1  I1NS
-	I32 I32NS
-	I64 I64NS
-	F32 F32NS
-	F64 F64NS
-	Ptr PtrNS
+	I1   I1NS
+	I32  I32NS
+	I64  I64NS
+	I128 I128NS
+	F32  F32NS
+	F64  F64NS
+	Ptr  PtrNS
 }
 
 func (b *Builder) init(blk *Block) {
@@ -24,6 +25,7 @@ func (b *Builder) init(blk *Block) {
 	b.I1 = I1NS{b}
 	b.I32 = I32NS{b}
 	b.I64 = I64NS{b}
+	b.I128 = I128NS{b}
 	b.F32 = F32NS{b}
 	b.F64 = F64NS{b}
 	b.Ptr = PtrNS{b}

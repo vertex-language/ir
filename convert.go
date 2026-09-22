@@ -27,6 +27,38 @@ func (n I64NS) ZExtI32(a I32) I64 { return I64{n.b.def1(Op{TypeI64, VZExtI32}, T
 // ZExtI1 widens a one-bit value to 0 or 1.
 func (n I64NS) ZExtI1(a I1) I64 { return I64{n.b.def1(Op{TypeI64, VZExtI1}, TypeI64, a.d)} }
 
+// SExtI64 sign-extends to the wide namespace: the high half is the sign of
+// the low one repeated.
+func (n I128NS) SExtI64(a I64) I128 {
+	return I128{n.b.def1(Op{TypeI128, VSExtI64}, TypeI128, a.d)}
+}
+
+// ZExtI64 zero-extends: the high half is zero.
+func (n I128NS) ZExtI64(a I64) I128 {
+	return I128{n.b.def1(Op{TypeI128, VZExtI64}, TypeI128, a.d)}
+}
+
+// ZExtI32 and ZExtI1 widen in one step rather than two.
+func (n I128NS) SExtI32(a I32) I128 {
+	return I128{n.b.def1(Op{TypeI128, VSExtI32}, TypeI128, a.d)}
+}
+func (n I128NS) ZExtI32(a I32) I128 {
+	return I128{n.b.def1(Op{TypeI128, VZExtI32}, TypeI128, a.d)}
+}
+func (n I128NS) ZExtI1(a I1) I128 {
+	return I128{n.b.def1(Op{TypeI128, VZExtI1}, TypeI128, a.d)}
+}
+
+// WrapI128 keeps the low half and discards the high one.
+func (n I64NS) WrapI128(a I128) I64 {
+	return I64{n.b.def1(Op{TypeI64, VWrapI128}, TypeI64, a.d)}
+}
+
+// WrapI128 on the narrow namespace keeps the low 32 bits.
+func (n I32NS) WrapI128(a I128) I32 {
+	return I32{n.b.def1(Op{TypeI32, VWrapI128}, TypeI32, a.d)}
+}
+
 // Narrowing to i8 or i16 is a store and widening from them is a sub-width load.
 // There is no register-to-register form, because i8 and i16 are not register
 // types.
@@ -191,3 +223,14 @@ func (n PtrNS) FromI64(a I64) Ptr { return Ptr{n.b.def1(Op{TypePtr, VFromI64}, T
 
 // FromPtr zero-extends where ptrbits < 64.
 func (n I64NS) FromPtr(a Ptr) I64 { return I64{n.b.def1(Op{TypeI64, VFromPtr}, TypeI64, a.d)} }
+
+// §C2 for the wide namespace, in both directions.
+func (n F32NS) SCvtI128(a I128) F32 { return F32{n.b.def1(Op{TypeF32, VSCvtI128}, TypeF32, a.d)} }
+func (n F32NS) UCvtI128(a I128) F32 { return F32{n.b.def1(Op{TypeF32, VUCvtI128}, TypeF32, a.d)} }
+func (n F64NS) SCvtI128(a I128) F64 { return F64{n.b.def1(Op{TypeF64, VSCvtI128}, TypeF64, a.d)} }
+func (n F64NS) UCvtI128(a I128) F64 { return F64{n.b.def1(Op{TypeF64, VUCvtI128}, TypeF64, a.d)} }
+
+func (n I128NS) SCvtF32(a F32) I128 { return I128{n.b.def1(Op{TypeI128, VSCvtF32}, TypeI128, a.d)} }
+func (n I128NS) SCvtF64(a F64) I128 { return I128{n.b.def1(Op{TypeI128, VSCvtF64}, TypeI128, a.d)} }
+func (n I128NS) UCvtF32(a F32) I128 { return I128{n.b.def1(Op{TypeI128, VUCvtF32}, TypeI128, a.d)} }
+func (n I128NS) UCvtF64(a F64) I128 { return I128{n.b.def1(Op{TypeI128, VUCvtF64}, TypeI128, a.d)} }

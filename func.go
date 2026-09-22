@@ -448,6 +448,9 @@ func (f *Func) param(t RegType, name string, attrs []ParamAttr) *Def {
 func (f *Func) ParamI1(name string, a ...ParamAttr) I1   { return I1{f.param(TypeI1, name, a)} }
 func (f *Func) ParamI32(name string, a ...ParamAttr) I32 { return I32{f.param(TypeI32, name, a)} }
 func (f *Func) ParamI64(name string, a ...ParamAttr) I64 { return I64{f.param(TypeI64, name, a)} }
+func (f *Func) ParamI128(name string, a ...ParamAttr) I128 {
+	return I128{f.param(TypeI128, name, a)}
+}
 func (f *Func) ParamF32(name string, a ...ParamAttr) F32 { return F32{f.param(TypeF32, name, a)} }
 func (f *Func) ParamF64(name string, a ...ParamAttr) F64 { return F64{f.param(TypeF64, name, a)} }
 func (f *Func) ParamF80(name string, a ...ParamAttr) F80 { return F80{f.param(TypeF80, name, a)} }
@@ -498,6 +501,7 @@ func (f *Func) ret(t RegType, attrs []ParamAttr) *Func {
 func (f *Func) ReturnsI1(a ...ParamAttr) *Func   { return f.ret(TypeI1, a) }
 func (f *Func) ReturnsI32(a ...ParamAttr) *Func  { return f.ret(TypeI32, a) }
 func (f *Func) ReturnsI64(a ...ParamAttr) *Func  { return f.ret(TypeI64, a) }
+func (f *Func) ReturnsI128(a ...ParamAttr) *Func { return f.ret(TypeI128, a) }
 func (f *Func) ReturnsF32(a ...ParamAttr) *Func  { return f.ret(TypeF32, a) }
 func (f *Func) ReturnsF64(a ...ParamAttr) *Func  { return f.ret(TypeF64, a) }
 func (f *Func) ReturnsF80(a ...ParamAttr) *Func  { return f.ret(TypeF80, a) }

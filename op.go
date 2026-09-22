@@ -130,16 +130,21 @@ const (
 	VUno Verb = "uno"
 
 	// §C integer conversions
-	VWrapI64 Verb = "wrap_i64"
-	VSExtI32 Verb = "sext_i32"
-	VZExtI32 Verb = "zext_i32"
-	VZExtI1  Verb = "zext_i1"
+	VWrapI64  Verb = "wrap_i64"
+	VWrapI128 Verb = "wrap_i128"
+	VSExtI32  Verb = "sext_i32"
+	VSExtI64  Verb = "sext_i64"
+	VZExtI32  Verb = "zext_i32"
+	VZExtI64  Verb = "zext_i64"
+	VZExtI1   Verb = "zext_i1"
 
 	// §C2 int to float
-	VSCvtI32 Verb = "scvt_i32"
-	VSCvtI64 Verb = "scvt_i64"
-	VUCvtI32 Verb = "ucvt_i32"
-	VUCvtI64 Verb = "ucvt_i64"
+	VSCvtI32  Verb = "scvt_i32"
+	VSCvtI64  Verb = "scvt_i64"
+	VSCvtI128 Verb = "scvt_i128"
+	VUCvtI32  Verb = "ucvt_i32"
+	VUCvtI64  Verb = "ucvt_i64"
+	VUCvtI128 Verb = "ucvt_i128"
 
 	// §C2 float to int, trapping
 	VSCvtF32  Verb = "scvt_f32"

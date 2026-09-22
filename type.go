@@ -12,6 +12,16 @@ const (
 	TypeI1
 	TypeI32
 	TypeI64
+
+	// TypeI128 is the 128-bit integer namespace. No machine this targets
+	// has a 128-bit general register, and it does not need one: the width
+	// is carried as a pair of i64 halves, the way i386 already carries i64
+	// as a pair of i32s. Arithmetic that a pair cannot do in line -- the
+	// four divisions -- becomes a call to the helper a C compiler would
+	// call, which is what §E already does for the widths a target is
+	// short of.
+	TypeI128
+
 	TypeF32
 	TypeF64
 	TypeF80
@@ -32,7 +42,8 @@ const (
 
 var regTypeText = [...]string{
 	TypeNone: "<none>", TypeI1: "i1", TypeI32: "i32", TypeI64: "i64",
-	TypeF32: "f32", TypeF64: "f64", TypeF80: "f80", TypeF128: "f128",
+	TypeI128: "i128",
+	TypeF32:  "f32", TypeF64: "f64", TypeF80: "f80", TypeF128: "f128",
 	TypeV128: "v128",
 	TypePtr:  "ptr",
 }
@@ -44,8 +55,14 @@ func (t RegType) String() string {
 	return "RegType(" + strconv.Itoa(int(t)) + ")"
 }
 
-// IsInt reports whether t is one of i1, i32, i64.
-func (t RegType) IsInt() bool { return t == TypeI1 || t == TypeI32 || t == TypeI64 }
+// IsInt reports whether t is one of i1, i32, i64, i128.
+func (t RegType) IsInt() bool {
+	return t == TypeI1 || t == TypeI32 || t == TypeI64 || t == TypeI128
+}
+
+// IsWide reports whether t is a namespace a target carries as a pair of
+// narrower registers rather than in one.
+func (t RegType) IsWide() bool { return t == TypeI128 }
 
 // IsFloat reports whether t is any float namespace, extended ones included.
 func (t RegType) IsFloat() bool {
@@ -69,6 +86,7 @@ const (
 	StoreI16
 	StoreI32
 	StoreI64
+	StoreI128
 	StoreF32
 	StoreF64
 	StoreF80
@@ -79,7 +97,8 @@ const (
 
 var storeTypeText = [...]string{
 	StoreNone: "<none>", StoreI8: "i8", StoreI16: "i16", StoreI32: "i32",
-	StoreI64: "i64", StoreF32: "f32", StoreF64: "f64", StoreF80: "f80",
+	StoreI64: "i64", StoreI128: "i128",
+	StoreF32: "f32", StoreF64: "f64", StoreF80: "f80",
 	StoreF128: "f128", StoreV128: "v128", StorePtr: "ptr",
 }
 
@@ -98,6 +117,8 @@ func (s StoreType) RegType() RegType {
 		return TypeI32
 	case StoreI64:
 		return TypeI64
+	case StoreI128:
+		return TypeI128
 	case StoreF32:
 		return TypeF32
 	case StoreF64:

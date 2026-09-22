@@ -84,6 +84,7 @@ type (
 	I1   struct{ d *Def }
 	I32  struct{ d *Def }
 	I64  struct{ d *Def }
+	I128 struct{ d *Def }
 	F32  struct{ d *Def }
 	F64  struct{ d *Def }
 	F80  struct{ d *Def }
@@ -95,6 +96,7 @@ type (
 func (v I1) Def() *Def   { return v.d }
 func (v I32) Def() *Def  { return v.d }
 func (v I64) Def() *Def  { return v.d }
+func (v I128) Def() *Def { return v.d }
 func (v F32) Def() *Def  { return v.d }
 func (v F64) Def() *Def  { return v.d }
 func (v F80) Def() *Def  { return v.d }
@@ -105,6 +107,7 @@ func (v Ptr) Def() *Def  { return v.d }
 func (v I1) RegType() RegType   { return TypeI1 }
 func (v I32) RegType() RegType  { return TypeI32 }
 func (v I64) RegType() RegType  { return TypeI64 }
+func (v I128) RegType() RegType { return TypeI128 }
 func (v F32) RegType() RegType  { return TypeF32 }
 func (v F64) RegType() RegType  { return TypeF64 }
 func (v F80) RegType() RegType  { return TypeF80 }
@@ -115,6 +118,7 @@ func (v Ptr) RegType() RegType  { return TypePtr }
 func (v I1) IsZero() bool   { return v.d == nil }
 func (v I32) IsZero() bool  { return v.d == nil }
 func (v I64) IsZero() bool  { return v.d == nil }
+func (v I128) IsZero() bool { return v.d == nil }
 func (v F32) IsZero() bool  { return v.d == nil }
 func (v F64) IsZero() bool  { return v.d == nil }
 func (v F80) IsZero() bool  { return v.d == nil }
@@ -127,6 +131,7 @@ func (v Ptr) IsZero() bool  { return v.d == nil }
 func (v I1) Named(s string) I1     { v.d.SetName(s); return v }
 func (v I32) Named(s string) I32   { v.d.SetName(s); return v }
 func (v I64) Named(s string) I64   { v.d.SetName(s); return v }
+func (v I128) Named(s string) I128 { v.d.SetName(s); return v }
 func (v F32) Named(s string) F32   { v.d.SetName(s); return v }
 func (v F64) Named(s string) F64   { v.d.SetName(s); return v }
 func (v F80) Named(s string) F80   { v.d.SetName(s); return v }

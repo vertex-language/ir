@@ -32,7 +32,7 @@ func (b *Builder) accessWidth(t RegType) uint64 {
 		return 4
 	case TypeI64, TypeF64:
 		return 8
-	case TypeF80, TypeF128, TypeV128:
+	case TypeI128, TypeF80, TypeF128, TypeV128:
 		return 16
 	case TypePtr:
 		if m := b.mod(); m != nil && m.layout.PtrBits > 0 {
@@ -97,6 +97,7 @@ func (b *Builder) store(t RegType, val, addr *Def, attrs []MemAttr) {
 
 func (n I32NS) Load(p Ptr, a ...MemAttr) I32   { return I32{n.b.load(TypeI32, p, a)} }
 func (n I64NS) Load(p Ptr, a ...MemAttr) I64   { return I64{n.b.load(TypeI64, p, a)} }
+func (n I128NS) Load(p Ptr, a ...MemAttr) I128 { return I128{n.b.load(TypeI128, p, a)} }
 func (n F32NS) Load(p Ptr, a ...MemAttr) F32   { return F32{n.b.load(TypeF32, p, a)} }
 func (n F64NS) Load(p Ptr, a ...MemAttr) F64   { return F64{n.b.load(TypeF64, p, a)} }
 func (n F80NS) Load(p Ptr, a ...MemAttr) F80   { return F80{n.b.load(TypeF80, p, a)} }
@@ -108,6 +109,7 @@ func (n PtrNS) Load(p Ptr, a ...MemAttr) Ptr   { return Ptr{n.b.load(TypePtr, p,
 // error, not a runtime refusal.
 func (n I32NS) Store(v I32, dst Ptr, a ...MemAttr)   { n.b.store(TypeI32, v.d, dst.d, a) }
 func (n I64NS) Store(v I64, dst Ptr, a ...MemAttr)   { n.b.store(TypeI64, v.d, dst.d, a) }
+func (n I128NS) Store(v I128, dst Ptr, a ...MemAttr) { n.b.store(TypeI128, v.d, dst.d, a) }
 func (n F32NS) Store(v F32, dst Ptr, a ...MemAttr)   { n.b.store(TypeF32, v.d, dst.d, a) }
 func (n F64NS) Store(v F64, dst Ptr, a ...MemAttr)   { n.b.store(TypeF64, v.d, dst.d, a) }
 func (n F80NS) Store(v F80, dst Ptr, a ...MemAttr)   { n.b.store(TypeF80, v.d, dst.d, a) }
