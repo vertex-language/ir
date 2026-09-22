@@ -428,7 +428,7 @@ func iselAlloc(c *cursor, vr *vregs, fr *frame, in *ir.Inst, opts Options) error
 	if err != nil {
 		return fmt.Errorf("%s: %w", in.Op(), err)
 	}
-	c.Emit(mir.Instr{Op: frameOp{off: off}, Defs: []mir.VReg{dst}})
+	c.Emit(mir.Instr{Op: frameOp{off: off, align: fr.overAlign[in]}, Defs: []mir.VReg{dst}})
 
 	if !in.Zeroed() {
 		return nil

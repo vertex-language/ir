@@ -207,7 +207,14 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 				}
 
 			case frameOp:
-				emitFrameAddr(text, x(in.Defs[0]), fr.local(op.off))
+				xd := x(in.Defs[0])
+				emitFrameAddr(text, xd, fr.local(op.off))
+				if op.align > maxAlign {
+					// Up to the alignment the slot asked for, inside the
+					// padding reserved with it.
+					text.AddImm64(xd, xd, int64(op.align-1))
+					text.AndImm64(xd, xd, ^(op.align - 1))
+				}
 
 			case frameLoadOp:
 				if op.narrow != 0 {

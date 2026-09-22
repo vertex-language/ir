@@ -246,7 +246,14 @@ type (
 	}
 
 	// frameOp is an address in this function's own frame, relative to FP.
-	frameOp struct{ off int64 }
+	//
+	// align is set for a slot that asked for stricter alignment than the
+	// frame guarantees: the address is rounded up to it, within padding
+	// reserved for exactly that (see frame.overAlign).
+	frameOp struct {
+		off   int64
+		align uint64
+	}
 
 	// frameLoadOp and frameStoreOp reach a frame slot by displacement from
 	// X29, which is what an incoming stack parameter and a spill both are.

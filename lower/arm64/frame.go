@@ -29,6 +29,11 @@ type frame struct {
 
 	slot map[*ir.Inst]int64 // ptr.alloc -> its offset from X29
 
+	// overAlign is the alignment a slot asked for that is stricter than
+	// the frame's own. Its address is rounded up to that where it is
+	// taken, inside the padding reserved with it.
+	overAlign map[*ir.Inst]uint64
+
 	saveAt map[reg.X]int64 // callee-saved register -> its slot
 
 	// saveAtVec is the same for the vector file. AAPCS64 preserves only
@@ -143,7 +148,7 @@ func (f *frame) reserveSaves(regs []reg.X, vecs []reg.V) {
 // planFrame assigns every ptr.alloc in fn a slot and returns the frame they
 // add up to.
 func planFrame(fn *ir.Func, opts Options) (*frame, error) {
-	fr := &frame{slot: map[*ir.Inst]int64{}}
+	fr := &frame{slot: map[*ir.Inst]int64{}, overAlign: map[*ir.Inst]uint64{}}
 
 	fr.apple = opts.Variadic == VariadicDarwin
 	if places, err := classifyAAPCS(paramArgs(fn), sretParamType(fn), fr.apple); err == nil {
@@ -208,7 +213,14 @@ func planFrame(fn *ir.Func, opts Options) (*frame, error) {
 				return nil, fmt.Errorf("lower: %s: %s: %w", fn.Name(), in.Op(), err)
 			}
 			if align > maxAlign {
-				return nil, fmt.Errorf("lower: %s: ptr.alloc wants %d-byte alignment; the frame guarantees %d", fn.Name(), align, maxAlign)
+				// More than the frame itself promises. The slot is given
+				// the bytes the rounding can cost -- X29 is 16-aligned,
+				// so reaching any stricter alignment moves the address up
+				// by less than that alignment -- and the address is
+				// rounded where it is taken (see frameOp).
+				fr.overAlign[in] = align
+				size += align - maxAlign
+				align = maxAlign
 			}
 			off = alignUp(off+size, align)
 			if off > 1<<31 {
