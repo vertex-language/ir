@@ -157,7 +157,7 @@ func iselReturn(fn *ir.Func, c *cursor, vr *vregs, term *ir.Inst) error {
 	// wrote it into. The front end declared an sret parameter and returns
 	// nothing, so there is no operand here to read: the slot that parameter
 	// names is the value, and this is where it becomes a register again.
-	if agg, inRegs, err := sretInRegs(sretParamType(fn)); err != nil {
+	if agg, inRegs, err := sretInRegs(sretParamType(fn), sretMemory(fn.Signature())); err != nil {
 		return err
 	} else if inRegs {
 		return returnAggregate(fn, c, vr, agg)

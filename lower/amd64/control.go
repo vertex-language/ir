@@ -487,7 +487,7 @@ func iselReturn(fn *ir.Func, c *cursor, vr *vregs, term *ir.Inst) error {
 			if !found {
 				return fmt.Errorf("return: the sret parameter is defined outside the function")
 			}
-			agg, inRegs, err := sretRegs(abi, sretParamType(fn))
+			agg, inRegs, err := sretRegs(abi, sretParamType(fn), sretMemoryOf(fn.Signature()))
 			if err != nil {
 				return err
 			}

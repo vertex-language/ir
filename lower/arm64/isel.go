@@ -648,7 +648,7 @@ func tailArgsFitRegisters(what string, sig *ir.Sig, args []*ir.Def, opts Options
 	if sig != nil && sig.IsVariadic() {
 		variadic, named = true, len(sig.Params())
 	}
-	places, err := classifyCall(sigArgSpec(sig, args), named, variadic, opts.Variadic, sretOf(sig))
+	places, err := classifyCall(sigArgSpec(sig, args), named, variadic, opts.Variadic, sretOf(sig), sretMemory(sig))
 	if err != nil {
 		return fmt.Errorf("%s: %w", what, err)
 	}
@@ -718,7 +718,7 @@ func iselCallSeqTo(c *cursor, vr *vregs, what string, sig *ir.Sig,
 		variadic, named = true, len(sig.Params())
 	}
 	sret := sretOf(sig)
-	places, err := classifyCall(sigArgSpec(sig, args), named, variadic, opts.Variadic, sret)
+	places, err := classifyCall(sigArgSpec(sig, args), named, variadic, opts.Variadic, sret, sretMemory(sig))
 	if err != nil {
 		return fmt.Errorf("%s: %w", what, err)
 	}
@@ -726,7 +726,7 @@ func iselCallSeqTo(c *cursor, vr *vregs, what string, sig *ir.Sig,
 	// Whether this call's result comes back in registers rather than
 	// through the storage the sret parameter names.
 	var sretAgg *aggregate
-	if agg, inRegs, err := sretInRegs(sret); err != nil {
+	if agg, inRegs, err := sretInRegs(sret, sretMemory(sig)); err != nil {
 		return fmt.Errorf("%s: %w", what, err)
 	} else if inRegs {
 		sretAgg = &agg

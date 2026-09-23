@@ -46,6 +46,7 @@ type paKind uint8
 const (
 	paByVal paKind = iota + 1
 	paSRet
+	paSRetMem
 	paZExt
 	paSExt
 	paNoAlias
@@ -163,10 +164,25 @@ func ByVal(t *Type) ParamAttr { return ParamAttr{kind: paByVal, typ: t} }
 
 // SRet names the aggregate the callee writes its result into. §19.13 admits it
 // on at most one parameter, which is the first.
+//
+// Whether the result comes back in registers instead is the target's to
+// decide from the aggregate's shape. A front end that knows the language
+// forbids it -- C++ returns a class with a non-trivial copy constructor or
+// destructor in memory however small it is -- says so with SRetMemory.
 func SRet(t *Type) ParamAttr { return ParamAttr{kind: paSRet, typ: t} }
 
+// SRetMemory is SRet for a result the language requires in memory. The
+// target places the pointer where its convention puts an indirect result
+// -- x8 on AArch64, the first integer register on x86-64 -- and never
+// brings the aggregate back in registers.
+func SRetMemory(t *Type) ParamAttr { return ParamAttr{kind: paSRetMem, typ: t} }
+
 func (a ParamAttr) IsByVal() bool   { return a.kind == paByVal }
-func (a ParamAttr) IsSRet() bool    { return a.kind == paSRet }
+func (a ParamAttr) IsSRet() bool    { return a.kind == paSRet || a.kind == paSRetMem }
+
+// IsSRetMemory reports whether the result must come back in memory rather
+// than in registers, whatever its shape would allow.
+func (a ParamAttr) IsSRetMemory() bool { return a.kind == paSRetMem }
 func (a ParamAttr) IsZExt() bool    { return a.kind == paZExt }
 func (a ParamAttr) IsSExt() bool    { return a.kind == paSExt }
 func (a ParamAttr) IsNoAlias() bool { return a.kind == paNoAlias }
@@ -194,6 +210,8 @@ func (a ParamAttr) String() string {
 		return "byval"
 	case paSRet:
 		return "sret"
+	case paSRetMem:
+		return "sret_memory"
 	case paZExt:
 		return "zext"
 	case paSExt:
@@ -425,11 +443,11 @@ func (f *Func) param(t RegType, name string, attrs []ParamAttr) *Def {
 		return nil
 	}
 	for _, a := range attrs {
-		if a.kind == paSRet && len(f.sig.params) != 0 {
+		if a.IsSRet() && len(f.sig.params) != 0 {
 			f.m.fail(f.name, "", Op{}, ErrSRet, "sret on parameter %d", len(f.sig.params))
 			return nil
 		}
-		if (a.kind == paByVal || a.kind == paSRet) && t != TypePtr {
+		if (a.kind == paByVal || a.IsSRet()) && t != TypePtr {
 			f.m.fail(f.name, "", Op{}, ErrType, "%s on a %s parameter", a, t)
 			return nil
 		}

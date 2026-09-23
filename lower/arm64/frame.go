@@ -151,7 +151,7 @@ func planFrame(fn *ir.Func, opts Options) (*frame, error) {
 	fr := &frame{slot: map[*ir.Inst]int64{}, overAlign: map[*ir.Inst]uint64{}}
 
 	fr.apple = opts.Variadic == VariadicDarwin
-	if places, err := classifyAAPCS(paramArgs(fn), sretParamType(fn), fr.apple); err == nil {
+	if places, err := classifyAAPCS(paramArgs(fn), sretParamType(fn), sretMemory(fn.Signature()), fr.apple); err == nil {
 		fr.force = usesStack(places)
 		// A variadic function's list starts after whatever its named
 		// parameters put on the stack, which under Apple's variant is
@@ -291,7 +291,7 @@ func callPlaces(in *ir.Inst, opts Options) ([]place, error) {
 	if sig := callSig(in); sig != nil && sig.IsVariadic() {
 		variadic, named = true, len(sig.Params())
 	}
-	return classifyCall(callArgSpec(in, args), named, variadic, opts.Variadic, callSRetType(in))
+	return classifyCall(callArgSpec(in, args), named, variadic, opts.Variadic, callSRetType(in), sretMemory(callSig(in)))
 }
 
 // classifyCall places a call's arguments, honouring the variadic cut.
@@ -306,12 +306,12 @@ func callPlaces(in *ir.Inst, opts Options) ([]place, error) {
 // stack whatever its type, one eight-byte slot each, continuing from wherever
 // the named arguments left the stack. The named ones are placed exactly as
 // they would be in a non-variadic call.
-func classifyCall(args []abiArg, named int, variadic bool, abi VariadicABI, sret ir.FType) ([]place, error) {
+func classifyCall(args []abiArg, named int, variadic bool, abi VariadicABI, sret ir.FType, sretMem bool) ([]place, error) {
 	if !variadic || abi != VariadicDarwin {
-		return classifyAAPCS(args, sret, abi == VariadicDarwin)
+		return classifyAAPCS(args, sret, sretMem, abi == VariadicDarwin)
 	}
 
-	head, err := classifyAAPCS(args[:named], sret, true)
+	head, err := classifyAAPCS(args[:named], sret, sretMem, true)
 	if err != nil {
 		return nil, err
 	}
@@ -348,18 +348,32 @@ func classifyCall(args []abiArg, named int, variadic bool, abi VariadicABI, sret
 // through the caller's storage is the same classification, and it needs the
 // type to make it.
 func sretOf(sig *ir.Sig) ir.FType {
+	t, _ := sretOfWithMode(sig)
+	return t
+}
+
+// sretOfWithMode is sretOf, and whether the language requires the result
+// in memory whatever its shape would allow.
+func sretOfWithMode(sig *ir.Sig) (ir.FType, bool) {
 	if sig == nil || len(sig.Params()) == 0 {
-		return ir.FType{}
+		return ir.FType{}, false
 	}
 	for _, a := range sig.Params()[0].Attrs {
 		if a.IsSRet() && a.Type() != nil {
-			return a.Type().FType()
+			return a.Type().FType(), a.IsSRetMemory()
 		}
 	}
-	return ir.FType{}
+	return ir.FType{}, false
 }
 
 func sretParamType(fn *ir.Func) ir.FType { return sretOf(fn.Signature()) }
+
+// sretMemory reports whether a signature's indirect result must come back
+// in memory.
+func sretMemory(sig *ir.Sig) bool {
+	_, mem := sretOfWithMode(sig)
+	return mem
+}
 
 // callSRetType is the same question about a call's callee, answered from the
 // signature at the call site rather than from the arguments: the argument is
@@ -369,13 +383,19 @@ func callSRetType(in *ir.Inst) ir.FType { return sretOf(callSig(in)) }
 // sretInRegs reports whether a result of type t comes back in registers, and
 // in which. A result that does not is the caller's storage, whose address
 // arrives in X8.
-func sretInRegs(t ir.FType) (aggregate, bool, error) {
+func sretInRegs(t ir.FType, memory bool) (aggregate, bool, error) {
 	if t.IsZero() {
 		return aggregate{}, false, nil
 	}
 	agg, err := classifyAggregate(t)
 	if err != nil {
 		return aggregate{}, false, fmt.Errorf("sret %s: %w", t, err)
+	}
+	if memory {
+		// The language requires this one in memory whatever its shape
+		// would allow: C++ returns a class with a non-trivial copy
+		// constructor or destructor indirectly however small it is.
+		return agg, false, nil
 	}
 	switch agg.kind {
 	case aggGPR, aggHFA:
@@ -427,7 +447,7 @@ func alignUp(n, a uint64) uint64 {
 // here: a scalar stack argument is packed at its own size and alignment -- a
 // bool is one byte, an int four at the next four-byte boundary -- where the
 // base standard gives every one a doubleword. Aggregates keep the base rule.
-func classifyAAPCS(args []abiArg, sret ir.FType, apple bool) ([]place, error) {
+func classifyAAPCS(args []abiArg, sret ir.FType, sretMem bool, apple bool) ([]place, error) {
 	var ints, floats int
 	var stackBytes uint64
 	out := make([]place, len(args))
@@ -459,7 +479,7 @@ func classifyAAPCS(args []abiArg, sret ir.FType, apple bool) ([]place, error) {
 			continue
 		}
 		if i == 0 && !sret.IsZero() {
-			agg, inRegs, err := sretInRegs(sret)
+			agg, inRegs, err := sretInRegs(sret, sretMem)
 			if err != nil {
 				return nil, err
 			}
@@ -773,7 +793,7 @@ func outgoingBytes(places []place) uint64 {
 // classifyParams copies fn's parameters out of the registers they arrived in
 // and into vregs the allocator is free to place.
 func classifyParams(fn *ir.Func, entry *mir.Block, vr *vregs, fr *frame) error {
-	places, err := classifyAAPCS(paramArgs(fn), sretParamType(fn), fr.apple)
+	places, err := classifyAAPCS(paramArgs(fn), sretParamType(fn), sretMemory(fn.Signature()), fr.apple)
 	if err != nil {
 		return fmt.Errorf("lower: %s: %w", fn.Name(), err)
 	}

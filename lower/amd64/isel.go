@@ -1021,7 +1021,7 @@ func iselCallSeq(c *cursor, vr *vregs, what string, spec []abiArg, sig *ir.Sig, 
 	// parameter — so what the caller gets is the bytes, written through the
 	// address it passed as that parameter.
 	if len(spec) > 0 && !spec[0].sret.IsZero() {
-		agg, inRegs, err := sretRegs(abi, spec[0].sret)
+		agg, inRegs, err := sretRegs(abi, spec[0].sret, spec[0].sretMem)
 		if err != nil {
 			return fmt.Errorf("%s: %w", what, err)
 		}

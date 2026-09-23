@@ -421,6 +421,11 @@ type abiArg struct {
 	// an argument at all.
 	sret ir.FType
 
+	// sretMem says the language requires that result in memory, whatever
+	// its shape would allow: C++ returns a class with a non-trivial copy
+	// constructor or destructor indirectly however small it is.
+	sretMem bool
+
 	// vararg says this argument sits in the variadic tail: past the last
 	// parameter of a signature that declares one. SysV does not care —
 	// §3.2.3 places a value by its type — but the Microsoft ABI sends a
@@ -476,7 +481,7 @@ func classifySysV(args []abiArg) ([]place, error) {
 
 	for i, a := range args {
 		if i == 0 && !a.sret.IsZero() {
-			agg, inRegs, err := sretInRegs(a.sret)
+			agg, inRegs, err := sretInRegs(a.sret, a.sretMem)
 			if err != nil {
 				return nil, err
 			}
@@ -636,18 +641,32 @@ func usesStack(places []place) bool {
 // classifies an argument, so deciding whether one comes back in registers
 // needs the type to classify.
 func sretOf(sig *ir.Sig) ir.FType {
+	t, _ := sretOfWithMode(sig)
+	return t
+}
+
+// sretOfWithMode is sretOf, and whether the language requires the result
+// in memory whatever its shape would allow.
+func sretOfWithMode(sig *ir.Sig) (ir.FType, bool) {
 	if sig == nil || len(sig.Params()) == 0 {
-		return ir.FType{}
+		return ir.FType{}, false
 	}
 	for _, a := range sig.Params()[0].Attrs {
 		if a.IsSRet() && a.Type() != nil {
-			return a.Type().FType()
+			return a.Type().FType(), a.IsSRetMemory()
 		}
 	}
-	return ir.FType{}
+	return ir.FType{}, false
 }
 
 func sretParamType(fn *ir.Func) ir.FType { return sretOf(fn.Signature()) }
+
+// sretMemoryOf reports whether a signature's indirect result must come
+// back in memory.
+func sretMemoryOf(sig *ir.Sig) bool {
+	_, mem := sretOfWithMode(sig)
+	return mem
+}
 
 // callSRetType is the same question about a call's callee, answered from the
 // signature at the call site: the argument is a pointer either way, and only
@@ -658,11 +677,11 @@ func callSRetType(in *ir.Inst) ir.FType { return sretOf(calleeSig(in)) }
 // sretRetSlots for it: what an aggregate small enough to return in
 // registers occupies differs between the two conventions, and every
 // caller of either has an ABI in hand.
-func sretRegs(abi string, t ir.FType) (aggregate, bool, error) {
+func sretRegs(abi string, t ir.FType, memory bool) (aggregate, bool, error) {
 	if abi == abiMS {
 		return msSretInRegs(t)
 	}
-	return sretInRegs(t)
+	return sretInRegs(t, memory)
 }
 
 func sretSlots(abi string, agg aggregate) []regSlot {
@@ -675,7 +694,13 @@ func sretSlots(abi string, agg aggregate) []regSlot {
 // sretInRegs reports whether a result of type t comes back in registers, and
 // in which classes. A MEMORY result is the caller's storage instead, whose
 // address arrives in RDI and comes back in RAX.
-func sretInRegs(t ir.FType) (aggregate, bool, error) {
+func sretInRegs(t ir.FType, memory bool) (aggregate, bool, error) {
+	if memory && !t.IsZero() {
+		// The language requires this one in memory whatever its shape
+		// would allow.
+		agg, err := classifyAggregate(t)
+		return agg, false, err
+	}
 	if t.IsZero() {
 		return aggregate{}, false, nil
 	}
@@ -724,7 +749,7 @@ func paramArgs(fn *ir.Func) []abiArg {
 			}
 		}
 		if len(out) > 0 {
-			out[0].sret = sretOf(sig)
+			out[0].sret, out[0].sretMem = sretOfWithMode(sig)
 		}
 	}
 	return out
@@ -760,7 +785,7 @@ func callArgSpec(in *ir.Inst) []abiArg {
 		out[i].vararg = sig.IsVariadic()
 	}
 	if len(out) > 0 {
-		out[0].sret = sretOf(sig)
+		out[0].sret, out[0].sretMem = sretOfWithMode(sig)
 	}
 	return out
 }
