@@ -123,8 +123,8 @@ var (
 		Vector: true,
 	})
 
-	// The two device targets. Neither admits an ext-float — long double is
-	// f64 on both — and neither admits v128: CUDA's float4 is a struct
+	// The device targets. None admits an ext-float — long double is
+	// f64 on each — and none admits v128: CUDA's float4 is a struct
 	// with four fields, not a register, and the packed forms both ISAs
 	// have are reached through §W's verbs rather than a vector type. The
 	// abi names the device-function convention; a kernel's is the
@@ -136,6 +136,13 @@ var (
 	})
 	AMDGCN = NewTarget("amdgcn/hsa", Layout{
 		ABI: "hsa", Endian: LittleEndian, PtrBits: 64, StackAlign: 16,
+	})
+	// AIR64 is Apple's GPUs, through AIR, the IR Metal loads. Its layout
+	// is the other two's: a struct is laid out the same on both sides of
+	// a dispatch. Which GPU family, MSL version and deployment target the
+	// module is lowered for is the backend's Options.
+	AIR64 = NewTarget("air64/apple", Layout{
+		ABI: "air", Endian: LittleEndian, PtrBits: 64, StackAlign: 16,
 	})
 )
 

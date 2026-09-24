@@ -17,7 +17,8 @@ Four things live here and nothing else:
 - **`ir/text`** — the `.vir` syntax, print-only. Print a module. The
   only package in the repo that knows what VIR *looks like*.
 - **`ir/lower`** — VIR to a finished artifact, per architecture: an
-  immutable `obj.Object` for a CPU, a `*ptx.Module` for an NVIDIA GPU.
+  immutable `obj.Object` for a CPU, a `*ptx.Module` for an NVIDIA GPU,
+  an `*air.Module` for an Apple GPU.
   Its own `go.mod`, because it depends on `i386`, `amd64`, `arm64` and
   `ptx`, and the other three must not.
 
@@ -252,6 +253,28 @@ o, err := lower.Lower(m, lower.Options{ASIC: feature.GFX942})
 err = objelf.WriteHSACO(w, o)
 ```
 
+Apple is `ir.AIR64`, and the ending is a `.metallib` — the library
+`newLibraryWithURL:` loads — built by `lower/air` on the `air` repo,
+which writes AIR bitcode, Apple's dialect of LLVM IR. AIR is an SSA
+control-flow graph with typed values, so `lower/air` is translation
+rather than selection: blocks stay blocks, block parameters become phis,
+and there is no allocator. What it adds is the memory model. AIR has no
+generic pointer, so every pointer's address space — device, constant,
+threadgroup, thread — is inferred from where it came from, after every
+device function is inlined into its kernel and every frame slot that can
+be is promoted to a value; a pointer that could be in two spaces is
+refused by name. A frontend that knows a kernel's bindings, as vcx does
+for a `.metal` file, says so with `!binding`, `!param_space` and
+`!param_builtin` attachments (see `lower/air/func.go`).
+
+```go
+lower "github.com/vertex-language/ir/lower/air"
+"github.com/vertex-language/air/metallib"
+
+am, err := lower.Lower(m, lower.Options{})   // macOS 13, MSL 3.0, Apple7
+lib, err := metallib.Build(am)
+```
+
 ---
 
 ## Where this sits
@@ -266,6 +289,8 @@ architecture:
 | [`amd64`](https://github.com/vertex-language/amd64) | AMD64 | ELF, COFF, Mach-O |
 | [`arm64`](https://github.com/vertex-language/arm64) | AArch64 | ELF, COFF, Mach-O |
 | [`ptx`](https://github.com/vertex-language/ptx) | NVIDIA PTX | `.ptx` text, through `ptx/text` |
+| [`amdgpu`](https://github.com/vertex-language/amdgpu) | AMD GCN and CDNA | HSA code objects, through `amdgpu/obj/elf` |
+| [`air`](https://github.com/vertex-language/air) | Apple AIR | `.air` bitcode and `.metallib`s, through `air/bitcode` and `air/metallib` |
 
 Each is a complete, standalone instruction builder — registers, an ISA
 table, an encoder, and an in-memory `obj.Object` — with its own
@@ -301,24 +326,24 @@ honest state of it rather than the intended one. A row that is not ✅ is
 refused by name at `Lower`, with the reason — never lowered as something
 else.
 
-| | amd64 | arm64 | i386 | ptx | amdgpu |
-|---|---|---|---|---|---|
-| §A · §A2 arithmetic, wide multiply, overflow predicates | ✅ | ✅ | ✅ | ✅ | ✅ ¹⁰ |
-| §A3 float arithmetic, at `f32`/`f64` | ✅ | ✅ | ✅ | ✅, and the approximate six | ✅, and the approximate six |
-| §A4–§A7 bitwise, shifts, bit counting, constants | ✅ | ✅ | ✅ | ✅ | ✅ |
-| §B comparisons | ✅ | ✅ | ✅ | ✅ | ✅ |
-| §C–§C4 conversions | ✅ | ✅ | ✅ | ✅ | ✅ |
-| §D · §D2 memory, sub-width memory | ✅ | ✅ | ✅ | ✅ natural alignment ⁵ | ✅ natural alignment ⁵ |
-| §D3 pointer ops | all but `tlsaddr` | all but `tlsaddr` | all but `tlsaddr` | `alloc`, `alloca`, `getaddr`, `diff`, stack save/restore ⁶ | `alloc`, `getaddr`, `diff` ¹¹ |
-| §E bulk memory | ✅ non-`volatile` | ✅ non-`volatile` | ✅ non-`volatile` | ✅ as byte loops | ✅ as byte loops |
-| §F select | ✅ | ✅ | ✅ | ✅ | ✅ |
-| §G · §G2 calls, terminators, computed branches | all but `tail_call` ¹⁶ | ✅ | all but `tail_call` ¹⁶ | all but `brind`, `tail_call` ⁷ | all but `brind`, `tail_call` ¹⁴ |
-| §G3 unwinding — `invoke`, `invokeind`, `resume` | — | Mach-O | — | — ⁸ | — ⁸ |
-| §G4 inline assembly | — | — | — | `asm`; not `asm goto` | `asm`; not `asm goto` ¹⁵ |
-| §H atomics | ✅ | ✅ | ✅ | ✅ with scopes ⁹; not the narrow forms | ✅ with scopes ¹² |
-| §I variadics | ✅ ¹ | Apple's variant only ² | ✅ | — ⁸ | — ⁸ |
-| §W work-items, `barrier`, `shared`, the wave verbs | — | — | — | ✅ | ✅ ¹³ |
-| ext-float | `f128` ✅, `f80` — ³ | `f128` — ⁴ | `f80` — ³ | neither ⁸ | neither ⁸ |
+| | amd64 | arm64 | i386 | ptx | amdgpu | air |
+|---|---|---|---|---|---|---|
+| §A · §A2 arithmetic, wide multiply, overflow predicates | ✅ | ✅ | ✅ | ✅ | ✅ ¹⁰ | ✅, a zero divisor guarded ¹⁷ |
+| §A3 float arithmetic, at `f32`/`f64` | ✅ | ✅ | ✅ | ✅, and the approximate six | ✅, and the approximate six | `f32`, and the approximate six; no `f64` ¹⁸ |
+| §A4–§A7 bitwise, shifts, bit counting, constants | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| §B comparisons | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| §C–§C4 conversions | ✅ | ✅ | ✅ | ✅ | ✅ | all but `f64`, saturating ¹⁷ |
+| §D · §D2 memory, sub-width memory | ✅ | ✅ | ✅ | ✅ natural alignment ⁵ | ✅ natural alignment ⁵ | ✅ |
+| §D3 pointer ops | all but `tlsaddr` | all but `tlsaddr` | all but `tlsaddr` | `alloc`, `alloca`, `getaddr`, `diff`, stack save/restore ⁶ | `alloc`, `getaddr`, `diff` ¹¹ | `alloc`, `alloca`, `getaddr`, `diff`, each pointer in its inferred space ¹⁹ |
+| §E bulk memory | ✅ non-`volatile` | ✅ non-`volatile` | ✅ non-`volatile` | ✅ as byte loops | ✅ as byte loops | all but `memcmp`, as `llvm.mem*` |
+| §F select | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| §G · §G2 calls, terminators, computed branches | all but `tail_call` ¹⁶ | ✅ | all but `tail_call` ¹⁶ | all but `brind`, `tail_call` ⁷ | all but `brind`, `tail_call` ¹⁴ | the terminators but `brind`, `tail_call`; every call inlined ²⁰ |
+| §G3 unwinding — `invoke`, `invokeind`, `resume` | — | Mach-O | — | — ⁸ | — ⁸ | — ⁸ |
+| §G4 inline assembly | — | — | — | `asm`; not `asm goto` | `asm`; not `asm goto` ¹⁵ | — : Apple's ISA is not published |
+| §H atomics | ✅ | ✅ | ✅ | ✅ with scopes ⁹; not the narrow forms | ✅ with scopes ¹² | 32-bit ²¹ |
+| §I variadics | ✅ ¹ | Apple's variant only ² | ✅ | — ⁸ | — ⁸ | — ⁸ |
+| §W work-items, `barrier`, `shared`, the wave verbs | — | — | — | ✅ | ✅ ¹³ | ✅ ²² |
+| ext-float | `f128` ✅, `f80` — ³ | `f128` — ⁴ | `f80` — ³ | neither ⁸ | neither ⁸ | neither ⁸ |
 
 1. Except `ptr.va_arg_ref` of an aggregate small enough to have been
    passed in registers, whose eightbytes are scattered through the save
@@ -407,6 +432,26 @@ else.
     async functions need them; the other backends refuse them by name
     rather than lower them as a call and a return, which is not the
     guarantee the verb makes.
+17. An Apple GPU has no trap an app can see, so §0's traps are
+    divergences, each documented in `lower/air`: a divide guards its
+    divisor (a zero one answers the dividend), a float conversion out of
+    range saturates, and `trap` ends the thread.
+18. The hardware has no 64-bit float, and MSL no `double`: an `f64`
+    anywhere is refused by name.
+19. AIR has no generic pointer. Each pointer's space — device, constant,
+    threadgroup, thread — is inferred from where it came from, after
+    inlining and `PromoteSlots`; one that could be in two is refused.
+    A pointer loaded from memory is taken to be device memory's.
+20. Every function a kernel calls is inlined into it first, which is what
+    makes the space inference local. A kernel's parameters are its
+    buffers, `[[buffer(i)]]` in order, unless `!binding`, `!param_space`
+    and `!param_builtin` attachments say otherwise.
+21. Metal's atomics are relaxed, on 32-bit integers and floats in device
+    and threadgroup memory. A stronger ordering is a fence either side,
+    from MSL 3.2, and refused before it.
+22. VIR's work-item verbs are AIR's built-in arguments. `workgroup_size`
+    is the size dispatched, as CUDA's `blockDim` is, not the last
+    group's own when the groups do not divide the grid.
 4. `f128` on amd64 is compiler-rt — §0 is explicit that a namespace the
    layout admits is usable whether or not silicon implements it, and
    that lowering supplies the call. Its §A3 rows are the arithmetic and
