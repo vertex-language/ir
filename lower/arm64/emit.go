@@ -179,6 +179,12 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 			case stackRestoreOp:
 				text.MovSp64(reg.SP, x(in.Uses[0]))
 
+			case frameAddrOp:
+				text.MovSp64(x(in.Defs[0]), reg.X29)
+
+			case returnAddrOp:
+				text.LdrImm64(x(in.Defs[0]), arm64asm.Mem64(reg.X29).Off(8))
+
 			case addImmOp:
 				emitAddImm(text, op.imm, op.w, false, in, x, w)
 

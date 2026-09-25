@@ -580,3 +580,32 @@ int main(void) { printf("%x %x %x %g %x\n", tbl[0], tbl[1], tbl[2], second(), hb
 		t.Errorf("printed %q, want %q", got, want)
 	}
 }
+
+// ptr.returnaddr is where the call that reached a function goes back
+// to, and ptr.frameaddr the frame record it made: two calls from two
+// places see two addresses.
+func TestRunReturnAddress(t *testing.T) {
+	m := ir.NewModule("t", ir.AArch64MacOS)
+	f := m.Func("_site").Export()
+	f.ReturnsPtr()
+	e := f.Entry()
+	e.Return(e.Ptr.ReturnAddr())
+	g := m.Func("_frame").Export()
+	g.ReturnsPtr()
+	eg := g.Entry()
+	eg.Return(eg.Ptr.FrameAddr())
+	got := runNative(t, m, `
+#include <stdio.h>
+void* site(void); void* frame(void);
+int main(void) {
+    void* a = site();
+    void* b = site();
+    void* fr = frame();
+    printf("%d %d\n", a != b && a && b, fr != 0);
+    return 0;
+}
+`)
+	if got != "1 1\n" {
+		t.Errorf("printed %q", got)
+	}
+}

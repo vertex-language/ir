@@ -119,6 +119,10 @@ func iselInst(c *cursor, vr *vregs, fr *frame, in *ir.Inst, opts Options) error 
 		return iselAlloca(c, vr, fr, in, opts)
 	case ir.VStackSave:
 		return iselStackSave(c, vr, in)
+	case ir.VFrameAddr:
+		return iselFrameReg(c, vr, in, frameAddrOp{})
+	case ir.VReturnAddr:
+		return iselFrameReg(c, vr, in, returnAddrOp{})
 	case ir.VStackRestore:
 		return iselStackRestore(c, vr, in)
 	case ir.VTLSAddr:

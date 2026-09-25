@@ -220,6 +220,12 @@ type (
 	stackSaveOp    struct{}
 	stackRestoreOp struct{}
 
+	// frameAddrOp and returnAddrOp are §D3's ptr.frameaddr and
+	// ptr.returnaddr: X29, and the link register the frame record holds
+	// eight bytes above it. Either forces the frame record (frame.go).
+	frameAddrOp  struct{}
+	returnAddrOp struct{}
+
 	// addImmOp adds a literal to a register: ADD (immediate), or SUB
 	// (immediate) of its negation when imm is negative. isel makes one
 	// for the small offsets §I's list walk moves by, and the peephole

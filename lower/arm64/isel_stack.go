@@ -70,3 +70,14 @@ func iselStackRestore(c *cursor, vr *vregs, in *ir.Inst) error {
 	c.Emit(mir.Instr{Op: stackRestoreOp{}, Uses: []mir.VReg{src}})
 	return nil
 }
+
+// iselFrameReg lowers ptr.frameaddr and ptr.returnaddr: the frame record
+// this function's prologue made, which frame.go forces for either.
+func iselFrameReg(c *cursor, vr *vregs, in *ir.Inst, op any) error {
+	dst, err := vr.define(in.Result(0))
+	if err != nil {
+		return fmt.Errorf("%s: %w", in.Op(), err)
+	}
+	c.Emit(mir.Instr{Op: op, Defs: []mir.VReg{dst}})
+	return nil
+}
