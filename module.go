@@ -15,7 +15,7 @@ func (e Endian) String() string {
 	return "little"
 }
 
-// A Layout is §3's layout block: the five attributes that make sizeof, alignof
+// A Layout is §3's layout block: the attributes that make sizeof, alignof
 // and offsetof determinate and that admit or reject an ext-float namespace.
 type Layout struct {
 	ABI        string // the module's default calling convention; ccc means this
@@ -24,6 +24,19 @@ type Layout struct {
 	StackAlign uint
 	ExtFloat   []RegType // any of TypeF80, TypeF128; may be empty
 	Vector     bool      // whether the target has a 128-bit vector register file
+	HalfFloat  []RegType // any of TypeF16, TypeBF16; may be empty
+}
+
+// HasHalfFloat reports whether the layout admits a half-float namespace,
+// under the same rule as HasExtFloat: where the target has no instruction,
+// LegalizeHalf carries the value in an i32 and does the arithmetic in f32.
+func (l Layout) HasHalfFloat(t RegType) bool {
+	for _, e := range l.HalfFloat {
+		if e == t {
+			return true
+		}
+	}
+	return false
 }
 
 // HasExtFloat reports whether the layout admits an ext-float namespace. A
@@ -44,6 +57,8 @@ func (l Layout) Admits(t RegType) bool {
 	switch {
 	case t.IsExtFloat():
 		return l.HasExtFloat(t)
+	case t.IsHalfFloat():
+		return l.HasHalfFloat(t)
 	case t.IsVector():
 		return l.Vector
 	}
@@ -55,6 +70,11 @@ func (l Layout) clone() Layout {
 		e := make([]RegType, len(l.ExtFloat))
 		copy(e, l.ExtFloat)
 		l.ExtFloat = e
+	}
+	if l.HalfFloat != nil {
+		h := make([]RegType, len(l.HalfFloat))
+		copy(h, l.HalfFloat)
+		l.HalfFloat = h
 	}
 	return l
 }
@@ -81,6 +101,14 @@ func (t Target) Valid() bool    { return t.use != "" }
 func (t Target) Layout() Layout { return t.layout.clone() }
 func (t Target) String() string { return t.use }
 
+// stockHalfFloats is every stock target's half-float list. Both are admitted
+// everywhere, because every target can carry them: where the silicon has
+// no half-precision instruction, LegalizeHalf does the arithmetic in f32,
+// which is exact for both formats' +, -, *, / and sqrt (f32's 24 bits are
+// at least twice either one's precision plus two, so rounding twice is
+// rounding once).
+var stockHalfFloats = []RegType{TypeF16, TypeBF16}
+
 // Stock targets. long double and __float128 decide the ext-float list; the
 // vector flag is whether the architecture's *baseline* has a 128-bit register
 // file, which x86-64 and AArch64 both do — SSE2 is part of the former's
@@ -90,15 +118,15 @@ func (t Target) String() string { return t.use }
 // binaries that fault on the machines the target is for.
 var (
 	X86_64Linux = NewTarget("x86_64/linux", Layout{
-		ABI: "sysv", Endian: LittleEndian, PtrBits: 64, StackAlign: 16,
+		ABI: "sysv", Endian: LittleEndian, PtrBits: 64, StackAlign: 16, HalfFloat: stockHalfFloats,
 		ExtFloat: []RegType{TypeF80, TypeF128}, Vector: true,
 	})
 	I386Linux = NewTarget("i386/linux", Layout{
-		ABI: "sysv", Endian: LittleEndian, PtrBits: 32, StackAlign: 16,
+		ABI: "sysv", Endian: LittleEndian, PtrBits: 32, StackAlign: 16, HalfFloat: stockHalfFloats,
 		ExtFloat: []RegType{TypeF80},
 	})
 	AArch64Linux = NewTarget("aarch64/linux", Layout{
-		ABI: "aapcs", Endian: LittleEndian, PtrBits: 64, StackAlign: 16,
+		ABI: "aapcs", Endian: LittleEndian, PtrBits: 64, StackAlign: 16, HalfFloat: stockHalfFloats,
 		ExtFloat: []RegType{TypeF128}, Vector: true,
 	})
 	// Android's arm64 is the base AAPCS64 on ELF, the same layout as
@@ -107,19 +135,19 @@ var (
 	// dynamic linker at /system/bin/linker64, native code loaded as shared
 	// objects -- and everything past lowering has to be able to tell.
 	AArch64Android = NewTarget("aarch64/android", Layout{
-		ABI: "aapcs", Endian: LittleEndian, PtrBits: 64, StackAlign: 16,
+		ABI: "aapcs", Endian: LittleEndian, PtrBits: 64, StackAlign: 16, HalfFloat: stockHalfFloats,
 		ExtFloat: []RegType{TypeF128}, Vector: true,
 	})
 	X86_64MacOS = NewTarget("x86_64/macos", Layout{
-		ABI: "sysv", Endian: LittleEndian, PtrBits: 64, StackAlign: 16,
+		ABI: "sysv", Endian: LittleEndian, PtrBits: 64, StackAlign: 16, HalfFloat: stockHalfFloats,
 		ExtFloat: []RegType{TypeF80}, Vector: true,
 	})
 	AArch64MacOS = NewTarget("aarch64/macos", Layout{
-		ABI: "aapcs", Endian: LittleEndian, PtrBits: 64, StackAlign: 16,
+		ABI: "aapcs", Endian: LittleEndian, PtrBits: 64, StackAlign: 16, HalfFloat: stockHalfFloats,
 		Vector: true,
 	})
 	X86_64Windows = NewTarget("x86_64/windows", Layout{
-		ABI: "ms", Endian: LittleEndian, PtrBits: 64, StackAlign: 16,
+		ABI: "ms", Endian: LittleEndian, PtrBits: 64, StackAlign: 16, HalfFloat: stockHalfFloats,
 		Vector: true,
 	})
 
@@ -132,17 +160,17 @@ var (
 	// module is lowered for is that backend's Options, as a CPU's feature
 	// set is.
 	NVPTX64 = NewTarget("nvptx64/cuda", Layout{
-		ABI: "ptx", Endian: LittleEndian, PtrBits: 64, StackAlign: 16,
+		ABI: "ptx", Endian: LittleEndian, PtrBits: 64, StackAlign: 16, HalfFloat: stockHalfFloats,
 	})
 	AMDGCN = NewTarget("amdgcn/hsa", Layout{
-		ABI: "hsa", Endian: LittleEndian, PtrBits: 64, StackAlign: 16,
+		ABI: "hsa", Endian: LittleEndian, PtrBits: 64, StackAlign: 16, HalfFloat: stockHalfFloats,
 	})
 	// AIR64 is Apple's GPUs, through AIR, the IR Metal loads. Its layout
 	// is the other two's: a struct is laid out the same on both sides of
 	// a dispatch. Which GPU family, MSL version and deployment target the
 	// module is lowered for is the backend's Options.
 	AIR64 = NewTarget("air64/apple", Layout{
-		ABI: "air", Endian: LittleEndian, PtrBits: 64, StackAlign: 16,
+		ABI: "air", Endian: LittleEndian, PtrBits: 64, StackAlign: 16, HalfFloat: stockHalfFloats,
 	})
 )
 

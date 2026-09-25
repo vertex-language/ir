@@ -372,7 +372,7 @@ func sizeOf(t ir.FType, l ir.Layout) (uint64, bool) {
 		switch t.Scalar() {
 		case ir.StoreI8:
 			return 1, true
-		case ir.StoreI16:
+		case ir.StoreI16, ir.StoreF16, ir.StoreBF16:
 			return 2, true
 		case ir.StoreI32, ir.StoreF32:
 			return 4, true

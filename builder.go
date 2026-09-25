@@ -54,6 +54,31 @@ func (b *Builder) F128() F128NS {
 	return F128NS{b}
 }
 
+// F16 returns the f16 namespace, and BF16 the bf16 one, under the same
+// rule as F80: the layout block's halffloat list says whether the module
+// has them. Every stock target lists both.
+func (b *Builder) F16() F16NS {
+	b.requireHalfFloat(TypeF16)
+	return F16NS{b}
+}
+
+func (b *Builder) BF16() BF16NS {
+	b.requireHalfFloat(TypeBF16)
+	return BF16NS{b}
+}
+
+func (b *Builder) requireHalfFloat(t RegType) bool {
+	m := b.mod()
+	if m == nil {
+		return false
+	}
+	if !m.layout.HasHalfFloat(t) {
+		b.fail(Op{Type: t}, ErrLayout, "the layout block does not list %s", t)
+		return false
+	}
+	return true
+}
+
 func (b *Builder) requireExtFloat(t RegType) bool {
 	m := b.mod()
 	if m == nil {

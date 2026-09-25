@@ -86,6 +86,12 @@ func (pr *printer) module(m *ir.Module) {
 	for i, k := range layoutKeys {
 		pr.f("%s%-10s %s,\n", pr.indent, k, vals[i])
 	}
+	// halffloat is printed only where it lists something: it arrived
+	// after the others (§K), and a module that names no half float reads
+	// the way it did before the attribute existed.
+	if len(l.HalfFloat) > 0 {
+		pr.f("%s%-10s %s,\n", pr.indent, "halffloat", regTypeList(l.HalfFloat))
+	}
 	pr.s("}\n")
 
 	for _, it := range pr.items(m) {
@@ -94,12 +100,14 @@ func (pr *printer) module(m *ir.Module) {
 	}
 }
 
-func extFloatList(l ir.Layout) string {
-	if len(l.ExtFloat) == 0 {
+func extFloatList(l ir.Layout) string { return regTypeList(l.ExtFloat) }
+
+func regTypeList(ts []ir.RegType) string {
+	if len(ts) == 0 {
 		return "none"
 	}
-	parts := make([]string, len(l.ExtFloat))
-	for i, t := range l.ExtFloat {
+	parts := make([]string, len(ts))
+	for i, t := range ts {
 		parts[i] = t.String()
 	}
 	return strings.Join(parts, ", ")

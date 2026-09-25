@@ -38,6 +38,16 @@ const (
 	TypeV128
 
 	TypePtr
+
+	// TypeF16 and TypeBF16 are the half-float namespaces (§K's reservation,
+	// landed): IEEE binary16, and bfloat16 -- binary32's sign and exponent
+	// with seven bits of fraction. The layout block admits them under the
+	// same rule as ext-float. They are last so that no existing RegType
+	// moves: a backend indexing a table by one is not disturbed by a type
+	// it never sees, because LegalizeHalf takes both out of the module
+	// before lowering unless the target keeps them.
+	TypeF16
+	TypeBF16
 )
 
 var regTypeText = [...]string{
@@ -46,6 +56,7 @@ var regTypeText = [...]string{
 	TypeF32:  "f32", TypeF64: "f64", TypeF80: "f80", TypeF128: "f128",
 	TypeV128: "v128",
 	TypePtr:  "ptr",
+	TypeF16:  "f16", TypeBF16: "bf16",
 }
 
 func (t RegType) String() string {
@@ -66,12 +77,17 @@ func (t RegType) IsWide() bool { return t == TypeI128 }
 
 // IsFloat reports whether t is any float namespace, extended ones included.
 func (t RegType) IsFloat() bool {
-	return t == TypeF32 || t == TypeF64 || t == TypeF80 || t == TypeF128
+	return t == TypeF32 || t == TypeF64 || t == TypeF80 || t == TypeF128 ||
+		t == TypeF16 || t == TypeBF16
 }
 
 // IsExtFloat reports whether t is an ext-float namespace, whose availability
 // the layout block decides.
 func (t RegType) IsExtFloat() bool { return t == TypeF80 || t == TypeF128 }
+
+// IsHalfFloat reports whether t is a half-float namespace, f16 or bf16,
+// whose availability the layout block decides the same way.
+func (t RegType) IsHalfFloat() bool { return t == TypeF16 || t == TypeBF16 }
 
 // IsVector reports whether t is a vector namespace, whose availability the
 // layout block decides the same way.
@@ -93,6 +109,8 @@ const (
 	StoreF128
 	StoreV128
 	StorePtr
+	StoreF16
+	StoreBF16
 )
 
 var storeTypeText = [...]string{
@@ -100,6 +118,7 @@ var storeTypeText = [...]string{
 	StoreI64: "i64", StoreI128: "i128",
 	StoreF32: "f32", StoreF64: "f64", StoreF80: "f80",
 	StoreF128: "f128", StoreV128: "v128", StorePtr: "ptr",
+	StoreF16: "f16", StoreBF16: "bf16",
 }
 
 func (s StoreType) String() string {
@@ -131,6 +150,10 @@ func (s StoreType) RegType() RegType {
 		return TypeV128
 	case StorePtr:
 		return TypePtr
+	case StoreF16:
+		return TypeF16
+	case StoreBF16:
+		return TypeBF16
 	}
 	return TypeNone
 }

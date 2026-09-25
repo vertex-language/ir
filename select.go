@@ -47,3 +47,11 @@ func (n F128NS) Select(c I1, a, b F128) F128 {
 func (n PtrNS) Select(c I1, a, b Ptr) Ptr {
 	return Ptr{n.b.def1(Op{TypePtr, VSelect}, TypePtr, c.d, a.d, b.d)}
 }
+
+func (n F16NS) Select(c I1, a, b F16) F16 {
+	return F16{n.b.def1(Op{TypeF16, VSelect}, TypeF16, c.d, a.d, b.d)}
+}
+
+func (n BF16NS) Select(c I1, a, b BF16) BF16 {
+	return BF16{n.b.def1(Op{TypeBF16, VSelect}, TypeBF16, c.d, a.d, b.d)}
+}

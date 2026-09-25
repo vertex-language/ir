@@ -80,17 +80,26 @@ nothing else and nothing else can reference it.
 
 ```ebnf
 reg-type     ::= "i1" | "i32" | "i64" | "f32" | "f64" | "ptr" | ext-float
-               | vector-type
+               | half-float | vector-type
 ext-float    ::= "f80" | "f128"
+half-float   ::= "f16" | "bf16"
 vector-type  ::= "v128"
 store-type   ::= "i8" | "i16" | "i32" | "i64" | "f32" | "f64" | "ptr"
-               | ext-float | vector-type
+               | ext-float | half-float | vector-type
 ftype        ::= store-type | TypeName | "[" unsigned "]" ftype
 ```
 
 An `ext-float` namespace is available only if the module's `layout` block lists
 it. A `layout` block may provide zero, one, or both. `v128` is gated the same
-way, by `layout`'s `vector` attribute.
+way, by `layout`'s `vector` attribute, and the half floats by its `halffloat`
+attribute.
+
+`f16` is IEEE binary16. `bf16` is bfloat16: binary32's sign and eight-bit
+exponent with seven bits of fraction, which is binary32 cut to its top sixteen
+bits. Both are two bytes in memory with two-byte alignment. A target with no
+half-precision arithmetic still admits them: the reference legalizer carries
+each value in an `i32` and computes in `f32`, which is exact for every §A3 verb
+(see the instruction index, §0).
 
 `v128` is a 128-bit vector register and there is exactly one of it. The lane
 shape is not part of the type: the same sixteen bytes are eight words to one
@@ -124,6 +133,7 @@ layout-attr      ::= "abi"        ident
                    | "stackalign" unsigned
                    | "extfloat"   ( "none" | ext-float ( "," ext-float )* )
                    | "vector"     ( "none" | vector-type )
+                   | "halffloat"  ( "none" | half-float ( "," half-float )* )
 ```
 
 `module-decl`, `use-decl`, and `layout-decl` each appear exactly once, in that
@@ -136,9 +146,12 @@ lives in `layout`. Together the three declarations are what makes `sizeof`,
 `alignof`, and `offsetof` determinate, and what admits or rejects an
 `ext-float` namespace.
 
-`layout`'s six attributes are unordered within the braces and each appears
-once; a trailing comma after the last attribute is permitted but not
-required, matching every other brace-delimited list in this grammar.
+`layout`'s attributes are unordered within the braces and each appears at
+most once. The first six are required. `halffloat` is optional and absent
+means `none`: it arrived after the others (§K), and a module written before it
+existed means what it meant then. A trailing comma after the last attribute
+is permitted but not required, matching every other brace-delimited list in
+this grammar.
 
 **`abi` names the module's default calling convention**, and `ccc` in a
 `callconv` position (§6) means exactly that convention. A signature naming a
@@ -486,7 +499,7 @@ float-unary   ::= float-ns "." ( "neg" | "abs" | "sqrt"
                 | "f32." ( "rcp_approx" | "rsqrt_approx"
                          | "exp2_approx" | "log2_approx"
                          | "sin_approx"  | "cos_approx" )
-float-ns      ::= "f32" | "f64" | ext-float
+float-ns      ::= "f32" | "f64" | ext-float | half-float
 not-verb      ::= "i1.not" | "i32.not" | "i64.not"
 bitcount-verb ::= ( "i32" | "i64" ) "." ( "clz" | "ctz" | "popcnt" | "bswap" )
 
@@ -523,8 +536,11 @@ intfloat-conv ::= float-ns "." ( "scvt_i32" | "scvt_i64"
                                         | "ucvt_" float-src
                                         | "scvt_sat_" float-src
                                         | "ucvt_sat_" float-src )
-float-src     ::= "f32" | "f64" | ext-float
+float-src     ::= "f32" | "f64" | ext-float | half-float
 float-conv    ::= "f64.fcvt_f32" | "f32.fcvt_f64"
+                | half-float ".fcvt_f32" | half-float ".fcvt_f64"
+                | "f32.fcvt_" half-float | "f64.fcvt_" half-float
+                | "f16.fcvt_bf16" | "bf16.fcvt_f16"
                 | ext-float ".fcvt_f32" | ext-float ".fcvt_f64"
                 | "f32.fcvt_" ext-float | "f64.fcvt_" ext-float
                 | "f128.fcvt_f80" | "f80.fcvt_f128"
@@ -534,7 +550,12 @@ ptr-conv      ::= "ptr.from_i64" | "i64.from_ptr"
 ```
 
 `f128.fcvt_f80` and its inverse exist only on modules whose `layout` block's
-`extfloat` list names both namespaces.
+`extfloat` list names both namespaces, and `f16.fcvt_bf16` and its inverse
+only on modules whose `halffloat` list names both. A half float converts with
+`f32`, `f64`, `i32` and `i64` and not with an ext-float; a module wanting that
+goes through `f64`, which holds every half exactly. There is no half bitcast,
+as there is no ext-float one: no integer register type is sixteen bits wide,
+and the encoding is reached through memory.
 
 `cmp-verb` has no `i1` alternative: `i1.ne` is `i1.xor` and `i1.eq` is
 `i1.not` of that. See the instruction index, §L.
@@ -558,9 +579,9 @@ inst-blockaddr     ::= register "=" "ptr.blockaddr" Label
 inst-frameaddr     ::= register "=" ( "ptr.frameaddr" | "ptr.returnaddr" )
 
 load-verb          ::= ( "i32" | "i64" | "f32" | "f64" | "ptr" ) ".load"
-                     | ext-float ".load"
+                     | ext-float ".load" | half-float ".load"
 store-verb         ::= ( "i32" | "i64" | "f32" | "f64" | "ptr" ) ".store"
-                     | ext-float ".store"
+                     | ext-float ".store" | half-float ".store"
 subload-verb       ::= "i32" "." ( "sload8" | "sload16" | "uload8" | "uload16" )
                      | "i64" "." ( "sload8" | "sload16" | "sload32"
                                  | "uload8" | "uload16" | "uload32" )
@@ -793,7 +814,6 @@ None of the following requires a grammar change beyond the noted production.
 | Sub-word / pointer atomic coverage | New `rmw-verb` and `cas-verb` rows; no production shape changes. |
 | Function memory effects | `func-placement` and `import-placement` gain members (`readnone`, `readonly`, `argmemonly`). |
 | Pointer parameter facts | `param-attr` gains members (`nonnull`, `dereferenceable`, `align`). |
-| Half floats | `reg-type` and `store-type` gain `f16` / `bf16`; `layout` gains an attribute admitting them. |
 | Dynamic workgroup storage | `workitem-verb` gains `dynamic_shared_size`; the `shared` import itself is §19.24. |
 | Address-space attributes | `mem-attr` gains `"space" ident`. |
 | New metadata kinds | New `!ident` names; no production changes. |
@@ -830,8 +850,8 @@ The grammar admits these; a verifier rejects them.
     nesting, and element widths.
 11. `dllimport` appears only on imports and `dllexport` only on definitions;
     `common` appears only on globals in domain `rw`.
-12. A module naming an `ext-float` namespace absent from its `layout` block is
-    rejected, not emulated.
+12. A module naming an `ext-float` or `half-float` namespace absent from its
+    `layout` block is rejected, not emulated.
 13. `sret` appears on at most one parameter, which is the first.
 14. A `callind`'s `TypeName` resolves to a `func` typedef; its argument arity and
     types match that signature.

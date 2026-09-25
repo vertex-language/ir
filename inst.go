@@ -91,6 +91,8 @@ type (
 	F128 struct{ d *Def }
 	V128 struct{ d *Def }
 	Ptr  struct{ d *Def }
+	F16  struct{ d *Def }
+	BF16 struct{ d *Def }
 )
 
 func (v I1) Def() *Def   { return v.d }
@@ -103,6 +105,8 @@ func (v F80) Def() *Def  { return v.d }
 func (v F128) Def() *Def { return v.d }
 func (v V128) Def() *Def { return v.d }
 func (v Ptr) Def() *Def  { return v.d }
+func (v F16) Def() *Def  { return v.d }
+func (v BF16) Def() *Def { return v.d }
 
 func (v I1) RegType() RegType   { return TypeI1 }
 func (v I32) RegType() RegType  { return TypeI32 }
@@ -114,6 +118,8 @@ func (v F80) RegType() RegType  { return TypeF80 }
 func (v F128) RegType() RegType { return TypeF128 }
 func (v V128) RegType() RegType { return TypeV128 }
 func (v Ptr) RegType() RegType  { return TypePtr }
+func (v F16) RegType() RegType  { return TypeF16 }
+func (v BF16) RegType() RegType { return TypeBF16 }
 
 func (v I1) IsZero() bool   { return v.d == nil }
 func (v I32) IsZero() bool  { return v.d == nil }
@@ -125,6 +131,8 @@ func (v F80) IsZero() bool  { return v.d == nil }
 func (v F128) IsZero() bool { return v.d == nil }
 func (v V128) IsZero() bool { return v.d == nil }
 func (v Ptr) IsZero() bool  { return v.d == nil }
+func (v F16) IsZero() bool  { return v.d == nil }
+func (v BF16) IsZero() bool { return v.d == nil }
 
 // Named names the register. Go cannot see the name of the variable a value is
 // assigned to, so a name worth keeping in the text form is stated here.
@@ -138,6 +146,8 @@ func (v F80) Named(s string) F80   { v.d.SetName(s); return v }
 func (v F128) Named(s string) F128 { v.d.SetName(s); return v }
 func (v V128) Named(s string) V128 { v.d.SetName(s); return v }
 func (v Ptr) Named(s string) Ptr   { v.d.SetName(s); return v }
+func (v F16) Named(s string) F16   { v.d.SetName(s); return v }
+func (v BF16) Named(s string) BF16 { v.d.SetName(s); return v }
 
 // Wrap returns d in the Go type of its reg-type, or nil if d is nil.
 func Wrap(d *Def) Value {
@@ -163,6 +173,10 @@ func Wrap(d *Def) Value {
 		return V128{d}
 	case TypePtr:
 		return Ptr{d}
+	case TypeF16:
+		return F16{d}
+	case TypeBF16:
+		return BF16{d}
 	}
 	return nil
 }
@@ -433,3 +447,5 @@ func (r Results) F64(i int) F64   { return F64{r.at(i, TypeF64)} }
 func (r Results) F80(i int) F80   { return F80{r.at(i, TypeF80)} }
 func (r Results) F128(i int) F128 { return F128{r.at(i, TypeF128)} }
 func (r Results) Ptr(i int) Ptr   { return Ptr{r.at(i, TypePtr)} }
+func (r Results) F16(i int) F16   { return F16{r.at(i, TypeF16)} }
+func (r Results) BF16(i int) BF16 { return BF16{r.at(i, TypeBF16)} }

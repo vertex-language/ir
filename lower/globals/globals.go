@@ -446,6 +446,13 @@ func emitLiteral(tg Target, sec Section, g *ir.Global, t ir.FType, st ir.StoreTy
 			return fmt.Errorf("lower: @%s is %s; its initializer is not a float literal", g.Name(), t)
 		}
 		return emitFloat(sec, g, t, st, size, c.Float())
+	case ir.StoreF16, ir.StoreBF16:
+		// A half literal is rounded once, to nearest even, the way
+		// LegalizeHalf rounds its constants; its bytes are then an i16's.
+		if c.Kind() != ir.ConstFloat {
+			return fmt.Errorf("lower: @%s is %s; its initializer is not a float literal", g.Name(), t)
+		}
+		return emitScalar(sec, g, size, uint64(ir.HalfBits(st.RegType(), c.Float())))
 	}
 	v, err := ConstInt(tg, c)
 	if err != nil {

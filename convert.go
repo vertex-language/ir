@@ -234,3 +234,90 @@ func (n I128NS) SCvtF32(a F32) I128 { return I128{n.b.def1(Op{TypeI128, VSCvtF32
 func (n I128NS) SCvtF64(a F64) I128 { return I128{n.b.def1(Op{TypeI128, VSCvtF64}, TypeI128, a.d)} }
 func (n I128NS) UCvtF32(a F32) I128 { return I128{n.b.def1(Op{TypeI128, VUCvtF32}, TypeI128, a.d)} }
 func (n I128NS) UCvtF64(a F64) I128 { return I128{n.b.def1(Op{TypeI128, VUCvtF64}, TypeI128, a.d)} }
+
+// —— §C. Half floats ——
+//
+// f16 and bf16 convert to and from every core float and integer namespace,
+// which is the cost §0 says a new register type pays. Widening to f32 or
+// f64 is exact for both. Narrowing rounds to nearest even, once: f64 to
+// f16 is one rounding, not two through f32. There is no bitcast, as there
+// is none for f80: no integer register type is sixteen bits wide, and the
+// representation is reached through memory (store then uload16).
+
+func (n F16NS) FCvtF32(a F32) F16 { return F16{n.b.def1(Op{TypeF16, VFCvtF32}, TypeF16, a.d)} }
+func (n F32NS) FCvtF16(a F16) F32 { return F32{n.b.def1(Op{TypeF32, VFCvtF16}, TypeF32, a.d)} }
+func (n F16NS) FCvtF64(a F64) F16 { return F16{n.b.def1(Op{TypeF16, VFCvtF64}, TypeF16, a.d)} }
+func (n F64NS) FCvtF16(a F16) F64 { return F64{n.b.def1(Op{TypeF64, VFCvtF16}, TypeF64, a.d)} }
+
+func (n BF16NS) FCvtF32(a F32) BF16 { return BF16{n.b.def1(Op{TypeBF16, VFCvtF32}, TypeBF16, a.d)} }
+func (n F32NS) FCvtBF16(a BF16) F32 { return F32{n.b.def1(Op{TypeF32, VFCvtBF16}, TypeF32, a.d)} }
+func (n BF16NS) FCvtF64(a F64) BF16 { return BF16{n.b.def1(Op{TypeBF16, VFCvtF64}, TypeBF16, a.d)} }
+func (n F64NS) FCvtBF16(a BF16) F64 { return F64{n.b.def1(Op{TypeF64, VFCvtBF16}, TypeF64, a.d)} }
+
+// FCvtBF16 and FCvtF16 between the two halves round once: bf16 has the
+// range f16 lacks and f16 the precision bf16 lacks, so neither direction
+// is exact.
+func (n F16NS) FCvtBF16(a BF16) F16 { return F16{n.b.def1(Op{TypeF16, VFCvtBF16}, TypeF16, a.d)} }
+func (n BF16NS) FCvtF16(a F16) BF16 { return BF16{n.b.def1(Op{TypeBF16, VFCvtF16}, TypeBF16, a.d)} }
+
+func (n F16NS) SCvtI32(a I32) F16 { return F16{n.b.def1(Op{TypeF16, VSCvtI32}, TypeF16, a.d)} }
+func (n F16NS) UCvtI32(a I32) F16 { return F16{n.b.def1(Op{TypeF16, VUCvtI32}, TypeF16, a.d)} }
+func (n F16NS) SCvtI64(a I64) F16 { return F16{n.b.def1(Op{TypeF16, VSCvtI64}, TypeF16, a.d)} }
+func (n F16NS) UCvtI64(a I64) F16 { return F16{n.b.def1(Op{TypeF16, VUCvtI64}, TypeF16, a.d)} }
+
+func (n BF16NS) SCvtI32(a I32) BF16 { return BF16{n.b.def1(Op{TypeBF16, VSCvtI32}, TypeBF16, a.d)} }
+func (n BF16NS) UCvtI32(a I32) BF16 { return BF16{n.b.def1(Op{TypeBF16, VUCvtI32}, TypeBF16, a.d)} }
+func (n BF16NS) SCvtI64(a I64) BF16 { return BF16{n.b.def1(Op{TypeBF16, VSCvtI64}, TypeBF16, a.d)} }
+func (n BF16NS) UCvtI64(a I64) BF16 { return BF16{n.b.def1(Op{TypeBF16, VUCvtI64}, TypeBF16, a.d)} }
+
+// Half to integer traps out of range, as §C2's other float sources do; the
+// Sat forms clamp and turn NaN into zero.
+func (n I32NS) SCvtF16(a F16) I32 {
+	return I32{n.b.def1(Op{TypeI32, VSCvtF16}, TypeI32, a.d)}
+}
+func (n I32NS) SCvtSatF16(a F16) I32 {
+	return I32{n.b.def1(Op{TypeI32, VSCvtSatF16}, TypeI32, a.d)}
+}
+func (n I32NS) UCvtF16(a F16) I32 {
+	return I32{n.b.def1(Op{TypeI32, VUCvtF16}, TypeI32, a.d)}
+}
+func (n I32NS) UCvtSatF16(a F16) I32 {
+	return I32{n.b.def1(Op{TypeI32, VUCvtSatF16}, TypeI32, a.d)}
+}
+func (n I32NS) SCvtBF16(a BF16) I32 {
+	return I32{n.b.def1(Op{TypeI32, VSCvtBF16}, TypeI32, a.d)}
+}
+func (n I32NS) SCvtSatBF16(a BF16) I32 {
+	return I32{n.b.def1(Op{TypeI32, VSCvtSatBF16}, TypeI32, a.d)}
+}
+func (n I32NS) UCvtBF16(a BF16) I32 {
+	return I32{n.b.def1(Op{TypeI32, VUCvtBF16}, TypeI32, a.d)}
+}
+func (n I32NS) UCvtSatBF16(a BF16) I32 {
+	return I32{n.b.def1(Op{TypeI32, VUCvtSatBF16}, TypeI32, a.d)}
+}
+
+func (n I64NS) SCvtF16(a F16) I64 {
+	return I64{n.b.def1(Op{TypeI64, VSCvtF16}, TypeI64, a.d)}
+}
+func (n I64NS) SCvtSatF16(a F16) I64 {
+	return I64{n.b.def1(Op{TypeI64, VSCvtSatF16}, TypeI64, a.d)}
+}
+func (n I64NS) UCvtF16(a F16) I64 {
+	return I64{n.b.def1(Op{TypeI64, VUCvtF16}, TypeI64, a.d)}
+}
+func (n I64NS) UCvtSatF16(a F16) I64 {
+	return I64{n.b.def1(Op{TypeI64, VUCvtSatF16}, TypeI64, a.d)}
+}
+func (n I64NS) SCvtBF16(a BF16) I64 {
+	return I64{n.b.def1(Op{TypeI64, VSCvtBF16}, TypeI64, a.d)}
+}
+func (n I64NS) SCvtSatBF16(a BF16) I64 {
+	return I64{n.b.def1(Op{TypeI64, VSCvtSatBF16}, TypeI64, a.d)}
+}
+func (n I64NS) UCvtBF16(a BF16) I64 {
+	return I64{n.b.def1(Op{TypeI64, VUCvtBF16}, TypeI64, a.d)}
+}
+func (n I64NS) UCvtSatBF16(a BF16) I64 {
+	return I64{n.b.def1(Op{TypeI64, VUCvtSatBF16}, TypeI64, a.d)}
+}

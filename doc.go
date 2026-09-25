@@ -29,7 +29,7 @@
 //
 // # One Go type per reg-type
 //
-// I1, I32, I64, F32, F64, Ptr, and F80/F128 are the SSA value types. There is
+// I1, I32, I64, F32, F64, Ptr, F80/F128 and F16/BF16 are the SSA value types. There is
 // no I8 or I16: §2 makes those storage-only widths, reachable exactly through
 // the sub-width load and store verbs and nowhere else.
 //
@@ -42,7 +42,9 @@
 // Extended-float availability is a run-time property of the layout block, so
 // F80 and F128 are methods rather than fields: b.F80() on a module whose layout
 // omits it records ErrLayout. That is the Go-level analogue of §19.12's
-// rejected, not emulated.
+// rejected, not emulated. F16 and BF16 are methods for the same reason,
+// under the layout's halffloat list; every stock target lists both, and
+// Module.LegalizeHalf lowers them for a target with no half instructions.
 //
 // # Errors
 //

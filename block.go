@@ -228,6 +228,10 @@ func (b *Block) ParamF128(name string) F128 {
 	return F128{b.blockParam(TypeF128, name)}
 }
 func (b *Block) ParamPtr(name string) Ptr { return Ptr{b.blockParam(TypePtr, name)} }
+func (b *Block) ParamF16(name string) F16 { return F16{b.blockParam(TypeF16, name)} }
+func (b *Block) ParamBF16(name string) BF16 {
+	return BF16{b.blockParam(TypeBF16, name)}
+}
 
 // A BlockTarget is §7's target: a label and the argument list a branch supplies
 // to its parameters. To with no arguments emits the bare @label form.

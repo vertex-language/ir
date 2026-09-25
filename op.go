@@ -155,6 +155,10 @@ const (
 	VUCvtF64  Verb = "ucvt_f64"
 	VUCvtF80  Verb = "ucvt_f80"
 	VUCvtF128 Verb = "ucvt_f128"
+	VSCvtF16  Verb = "scvt_f16"
+	VSCvtBF16 Verb = "scvt_bf16"
+	VUCvtF16  Verb = "ucvt_f16"
+	VUCvtBF16 Verb = "ucvt_bf16"
 
 	// §C2 float to int, saturating
 	VSCvtSatF32  Verb = "scvt_sat_f32"
@@ -165,12 +169,18 @@ const (
 	VUCvtSatF64  Verb = "ucvt_sat_f64"
 	VUCvtSatF80  Verb = "ucvt_sat_f80"
 	VUCvtSatF128 Verb = "ucvt_sat_f128"
+	VSCvtSatF16  Verb = "scvt_sat_f16"
+	VSCvtSatBF16 Verb = "scvt_sat_bf16"
+	VUCvtSatF16  Verb = "ucvt_sat_f16"
+	VUCvtSatBF16 Verb = "ucvt_sat_bf16"
 
 	// §C3 float width and bitcast
 	VFCvtF32    Verb = "fcvt_f32"
 	VFCvtF64    Verb = "fcvt_f64"
 	VFCvtF80    Verb = "fcvt_f80"
 	VFCvtF128   Verb = "fcvt_f128"
+	VFCvtF16    Verb = "fcvt_f16"
+	VFCvtBF16   Verb = "fcvt_bf16"
 	VBitcastF32 Verb = "bitcast_f32"
 	VBitcastI32 Verb = "bitcast_i32"
 	VBitcastF64 Verb = "bitcast_f64"

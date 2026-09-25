@@ -67,6 +67,7 @@ layout {
   ptrbits    64,
   stackalign 16,
   extfloat   none,
+  halffloat  f16, bf16,
 }
 
 internal func @clampd(%x i32, %lim i32) i32 nounwind {

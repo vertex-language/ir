@@ -41,7 +41,7 @@ func scalarSizeAlign(s ir.StoreType) (uint64, uint64, error) {
 	switch s {
 	case ir.StoreI8:
 		return 1, 1, nil
-	case ir.StoreI16:
+	case ir.StoreI16, ir.StoreF16, ir.StoreBF16:
 		return 2, 2, nil
 	case ir.StoreI32, ir.StoreF32, ir.StorePtr:
 		return 4, 4, nil

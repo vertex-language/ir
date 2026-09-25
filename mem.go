@@ -28,6 +28,8 @@ const Zeroed AllocOpt = 1
 // The align attribute may not exceed it.
 func (b *Builder) accessWidth(t RegType) uint64 {
 	switch t {
+	case TypeF16, TypeBF16:
+		return 2
 	case TypeI32, TypeF32:
 		return 4
 	case TypeI64, TypeF64:
@@ -104,6 +106,8 @@ func (n F80NS) Load(p Ptr, a ...MemAttr) F80   { return F80{n.b.load(TypeF80, p,
 func (n F128NS) Load(p Ptr, a ...MemAttr) F128 { return F128{n.b.load(TypeF128, p, a)} }
 func (n V128NS) Load(p Ptr, a ...MemAttr) V128 { return V128{n.b.load(TypeV128, p, a)} }
 func (n PtrNS) Load(p Ptr, a ...MemAttr) Ptr   { return Ptr{n.b.load(TypePtr, p, a)} }
+func (n F16NS) Load(p Ptr, a ...MemAttr) F16   { return F16{n.b.load(TypeF16, p, a)} }
+func (n BF16NS) Load(p Ptr, a ...MemAttr) BF16 { return BF16{n.b.load(TypeBF16, p, a)} }
 
 // Store is value-first, address-last. Getting the order wrong is a Go type
 // error, not a runtime refusal.
@@ -116,6 +120,8 @@ func (n F80NS) Store(v F80, dst Ptr, a ...MemAttr)   { n.b.store(TypeF80, v.d, d
 func (n F128NS) Store(v F128, dst Ptr, a ...MemAttr) { n.b.store(TypeF128, v.d, dst.d, a) }
 func (n V128NS) Store(v V128, dst Ptr, a ...MemAttr) { n.b.store(TypeV128, v.d, dst.d, a) }
 func (n PtrNS) Store(v Ptr, dst Ptr, a ...MemAttr)   { n.b.store(TypePtr, v.d, dst.d, a) }
+func (n F16NS) Store(v F16, dst Ptr, a ...MemAttr)   { n.b.store(TypeF16, v.d, dst.d, a) }
+func (n BF16NS) Store(v BF16, dst Ptr, a ...MemAttr) { n.b.store(TypeBF16, v.d, dst.d, a) }
 
 // —— §D2. Sub-width load and store ——
 //

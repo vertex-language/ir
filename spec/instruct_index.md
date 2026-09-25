@@ -39,6 +39,17 @@ block's `extfloat` attribute lists that namespace. A `layout` may list zero,
 one, or both — x86-64 System V lists both, since `long double` is `f80` and
 `__float128` is `f128`.
 
+**Half float.** `f16` and `bf16` rows apply only where the module's `layout`
+block's `halffloat` attribute lists that namespace. Every stock target lists
+both. Few CPUs have half arithmetic and every GPU does, so this is the
+namespace where the next rule matters most: where the target has no half
+instruction, the reference legalizer (`LegalizeHalf`) carries a half in an
+`i32` whose low sixteen bits are its encoding, and computes in `f32`. That is
+exact, not an approximation. `f32`'s 24-bit significand is at least twice
+either half's precision plus two, so for `+ - * /` and `sqrt` rounding to `f32`
+and then to the half is rounding once. `fma` and every narrowing from `f64` are
+rounded to odd first so that the second rounding is the only one.
+
 **Vector.** §V applies only where the `layout` block's `vector` attribute admits
 `v128`. x86-64 and AArch64 both do, since SSE2 and Advanced SIMD are part of
 the definition of those architectures; a plain i386 target does not.
@@ -113,8 +124,10 @@ needs the result. The asymmetry is real hardware asymmetry, not an omission.
 
 ## A3. Float Arithmetic
 
-`float-ns` below is any of `f32`, `f64`, or an available `ext-float`. Rows are
-given for `f32`/`f64`; the extended namespaces carry the identical verb set.
+`float-ns` below is any of `f32`, `f64`, or an available `ext-float` or
+`half-float`. Rows are given for `f32`/`f64`; the extended and half namespaces
+carry the identical verb set, except the approximate six, which are `f32`'s
+alone. A kernel wanting `exp2` of a half widens first, as CUDA's `hexp2` does.
 
 | Instruction | Operands | Result |
 | --- | --- | --- |
@@ -317,6 +330,7 @@ is no register-to-register form, because `i8` and `i16` are not register types.
 | `f64.ucvt_i64` | `i64` | `f64` |
 | `f80.{scvt,ucvt}_{i32,i64}` | `i32`/`i64` | `f80` |
 | `f128.{scvt,ucvt}_{i32,i64}` | `i32`/`i64` | `f128` |
+| `{f16,bf16}.{scvt,ucvt}_{i32,i64}` | `i32`/`i64` | half — round-to-nearest-even, once |
 | `i32.scvt_f32` | `f32` | `i32` — traps out-of-range/NaN |
 | `i32.scvt_f64` | `f64` | `i32` — traps out-of-range/NaN |
 | `i64.scvt_f32` | `f32` | `i64` — traps out-of-range/NaN |
@@ -326,6 +340,7 @@ is no register-to-register form, because `i8` and `i16` are not register types.
 | `i64.ucvt_f32` | `f32` | `i64` — traps out-of-range/NaN |
 | `i64.ucvt_f64` | `f64` | `i64` — traps out-of-range/NaN |
 | `{i32,i64}.{scvt,ucvt}_{f80,f128}` | ext | `i32`/`i64` — traps |
+| `{i32,i64}.{scvt,ucvt}_{f16,bf16}` | half | `i32`/`i64` — traps |
 | `i32.scvt_sat_f32` | `f32` | `i32` — clamps, NaN→0 |
 | `i32.scvt_sat_f64` | `f64` | `i32` — clamps, NaN→0 |
 | `i64.scvt_sat_f32` | `f32` | `i64` — clamps, NaN→0 |
@@ -335,6 +350,7 @@ is no register-to-register form, because `i8` and `i16` are not register types.
 | `i64.ucvt_sat_f32` | `f32` | `i64` — clamps, NaN→0 |
 | `i64.ucvt_sat_f64` | `f64` | `i64` — clamps, NaN→0 |
 | `{i32,i64}.{scvt,ucvt}_sat_{f80,f128}` | ext | `i32`/`i64` — clamps, NaN→0 |
+| `{i32,i64}.{scvt,ucvt}_sat_{f16,bf16}` | half | `i32`/`i64` — clamps, NaN→0 |
 
 A C frontend emits the `_sat_` forms only where it has proven the conversion
 in range or has chosen to define the out-of-range case; the trapping forms are
@@ -354,13 +370,20 @@ the default, per the no-UB commitment.
 | `f32.fcvt_f128` / `f64.fcvt_f128` | `f128` | `f32`/`f64` — narrow, round |
 | `f128.fcvt_f80` | `f80` | `f128` — widen, exact; both namespaces required |
 | `f80.fcvt_f128` | `f128` | `f80` — narrow, round; both namespaces required |
+| `f32.fcvt_{f16,bf16}` / `f64.fcvt_{f16,bf16}` | half | `f32`/`f64` — widen, exact |
+| `{f16,bf16}.fcvt_f32` / `{f16,bf16}.fcvt_f64` | `f32`/`f64` | half — narrow, round-to-nearest-even, once |
+| `f16.fcvt_bf16` / `bf16.fcvt_f16` | half | half — round once; both namespaces required. Neither direction is exact: bf16 has the range f16 lacks, and f16 the precision bf16 lacks |
 | `i32.bitcast_f32` | `f32` | `i32` — reinterpret, no conversion |
 | `f32.bitcast_i32` | `i32` | `f32` — reinterpret, no conversion |
 | `i64.bitcast_f64` | `f64` | `i64` — reinterpret, no conversion |
 | `f64.bitcast_i64` | `i64` | `f64` — reinterpret, no conversion |
 
-There is no bitcast for `f80` or `f128`: neither has an integer register type of
-matching width. Reach their representation through memory.
+There is no bitcast for `f80`, `f128`, `f16` or `bf16`: none has an integer
+register type of matching width. Reach their representation through memory
+(for a half, `store` then `i32.uload16`).
+
+`f64` to a half is one rounding and not two through `f32`. A lowering that
+goes through `f32` has to round to odd on the way.
 
 ## C4. Conversions — Pointer ↔ Integer
 
@@ -380,12 +403,14 @@ There is no `i32` pair; see §L.
 | `f32.load` | `ptr` | `f32` |
 | `f64.load` | `ptr` | `f64` |
 | `f80.load` / `f128.load` | `ptr` | per target |
+| `f16.load` / `bf16.load` | `ptr` | half — two bytes |
 | `ptr.load` | `ptr` | `ptr` |
 | `i32.store` | `i32, ptr` | — |
 | `i64.store` | `i64, ptr` | — |
 | `f32.store` | `f32, ptr` | — |
 | `f64.store` | `f64, ptr` | — |
 | `f80.store` / `f128.store` | ext, `ptr` | — |
+| `f16.store` / `bf16.store` | half, `ptr` | — two bytes |
 | `ptr.store` | `ptr, ptr` | — value first, destination second |
 
 ## D2. Memory — Sub-Width Load / Store
@@ -882,7 +907,8 @@ function call.
 | Wider extended floats | A new `ext-float` member, admitted by the `layout` block. |
 | Function memory effects | New function placements (`readnone`, `readonly`, `argmemonly`). |
 | Pointer parameter facts | New parameter attributes (`nonnull`, `dereferenceable`, `align`). |
-| Half floats | `f16` and `bf16` as namespaces the `layout` block admits, under the same rule as `ext-float`; each pays §C's conversion cost. |
+| Half-float packed arithmetic | `f16x2` / `bf16x2` lane verbs (`hadd2`, `hfma2`), which every GPU in scope has. They arrive with a lowering that selects them. |
+| Narrow storage floats | `f8e4m3`, `f8e5m2`, `f4e2m1` and `i4` as `store-type`s only: loads and stores that widen to `f16`/`f32` and narrow back, and no arithmetic namespace, because no hardware computes in them except inside a matrix instruction. |
 | Dynamic workgroup storage size | An `i32.dynamic_shared_size` row in §W1; the unsized `shared` import is in the grammar (§19.24). |
 | Address-space attributes | A `space` `mem-attr` naming where an access resolves, for a lowering that can prove nothing from the pointer. |
 | Metadata kinds | New `!ident` names; debug information is the first consumer. Two are named already: `!max_workgroup_size n` and `!min_workgroups_per_cu n` on a `kernel` function are its launch bounds -- the most work-items a launch may give it, and the fewest workgroups a compute unit should hold -- which a backend turns into its own directive (PTX's `.maxntid` and `.minnctapersm`, the AMDGPU descriptor's `max_flat_workgroup_size`) and which say nothing about the function's meaning. |
@@ -965,10 +991,20 @@ relocation records admit and no more.
 
 | § | change |
 | --- | --- |
+| 0 | half-float availability rule, with its exactness argument |
+| A3 | `f16` and `bf16` carry the verb set, not the approximate six |
+| C2, C3 | half-float conversion rows; round-once rule for `f64` to half |
+| D | `f16` / `bf16` `load` and `store` |
+| K | half floats struck (landed); packed half arithmetic and narrow storage floats added |
+
+### Changes from the revision before that
+
+| § | change |
+| --- | --- |
 | G2 | `tail_call` and `tail_callind`, terminators; their contract stated |
 | K | tail calls struck (landed as terminators rather than a modifier) |
 
-### Changes from the revision before that
+### Changes from the revision two before that
 
 | § | change |
 | --- | --- |
@@ -980,7 +1016,7 @@ relocation records admit and no more.
 | K | atomic min/max and named scopes struck (landed); half floats, dynamic workgroup storage, address-space attributes added |
 | L | float atomic min/max, pointer address spaces |
 
-### Changes from the revision two before that
+### Changes from the revision three before that
 
 | § | change |
 | --- | --- |

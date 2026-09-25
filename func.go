@@ -479,6 +479,10 @@ func (f *Func) ParamV128(name string, a ...ParamAttr) V128 {
 	return V128{f.param(TypeV128, name, a)}
 }
 func (f *Func) ParamPtr(name string, a ...ParamAttr) Ptr { return Ptr{f.param(TypePtr, name, a)} }
+func (f *Func) ParamF16(name string, a ...ParamAttr) F16 { return F16{f.param(TypeF16, name, a)} }
+func (f *Func) ParamBF16(name string, a ...ParamAttr) BF16 {
+	return BF16{f.param(TypeBF16, name, a)}
+}
 
 // ParamOf declares a parameter whose register type is worked out rather
 // than written down, which is what a pass copying one signature into
@@ -526,6 +530,8 @@ func (f *Func) ReturnsF80(a ...ParamAttr) *Func  { return f.ret(TypeF80, a) }
 func (f *Func) ReturnsF128(a ...ParamAttr) *Func { return f.ret(TypeF128, a) }
 func (f *Func) ReturnsV128(a ...ParamAttr) *Func { return f.ret(TypeV128, a) }
 func (f *Func) ReturnsPtr(a ...ParamAttr) *Func  { return f.ret(TypePtr, a) }
+func (f *Func) ReturnsF16(a ...ParamAttr) *Func  { return f.ret(TypeF16, a) }
+func (f *Func) ReturnsBF16(a ...ParamAttr) *Func { return f.ret(TypeBF16, a) }
 
 // A FuncImport is a reference to a function another module defines.
 type FuncImport struct {

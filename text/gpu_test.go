@@ -50,6 +50,7 @@ layout {
   ptrbits    64,
   stackalign 16,
   extfloat   none,
+  halffloat  f16, bf16,
 }
 
 export func @vector_add kernel(%a ptr noalias, %b ptr noalias, %c ptr noalias, %n i32) nounwind {
@@ -135,6 +136,7 @@ layout {
   ptrbits    64,
   stackalign 16,
   extfloat   none,
+  halffloat  f16, bf16,
 }
 
 global shared @tile [256]f32 align 16 = zeroed

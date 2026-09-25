@@ -59,6 +59,7 @@ layout {
   ptrbits    64,
   stackalign 16,
   extfloat   f80, f128,
+  halffloat  f16, bf16,
 }
 `)
 }

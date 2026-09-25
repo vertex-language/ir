@@ -415,6 +415,9 @@ func pureVerb(v Verb) bool {
 		VSCvtSatF32, VSCvtSatF64, VSCvtSatF80, VSCvtSatF128,
 		VUCvtSatF32, VUCvtSatF64, VUCvtSatF80, VUCvtSatF128,
 		VFCvtF32, VFCvtF64, VFCvtF80, VFCvtF128,
+		VSCvtF16, VSCvtBF16, VUCvtF16, VUCvtBF16,
+		VSCvtSatF16, VSCvtSatBF16, VUCvtSatF16, VUCvtSatBF16,
+		VFCvtF16, VFCvtBF16,
 		VBitcastF32, VBitcastI32, VBitcastF64, VBitcastI64,
 		VFromI64, VFromPtr, VGetAddr, VSelect:
 		return true
@@ -462,7 +465,8 @@ func identity(in *Inst) *Def {
 func traps(v Verb) bool {
 	switch v {
 	case VSDiv, VUDiv, VSRem, VURem,
-		VSCvtF32, VSCvtF64, VSCvtF80, VSCvtF128, VUCvtF32, VUCvtF64, VUCvtF80, VUCvtF128:
+		VSCvtF32, VSCvtF64, VSCvtF80, VSCvtF128, VUCvtF32, VUCvtF64, VUCvtF80, VUCvtF128,
+		VSCvtF16, VSCvtBF16, VUCvtF16, VUCvtBF16:
 		return true
 	}
 	return false

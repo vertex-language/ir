@@ -180,6 +180,8 @@ func (f *Func) allUses() map[*Def][]Use {
 // regBytes is how many bytes a full-width access of a register type moves.
 func regBytes(t RegType) uint64 {
 	switch t {
+	case TypeF16, TypeBF16:
+		return 2
 	case TypeI32, TypeF32:
 		return 4
 	case TypeI64, TypeF64, TypePtr:

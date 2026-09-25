@@ -20,7 +20,7 @@ Vertex IR (VIR) is a typed SSA intermediate representation for native AOT and JI
 
 ## Type system
 
-Types are signless — interpretation lives in the verb. The set splits by where a value can live. Register types are `i1`, `i32`, `i64`, `f32`, `f64`, `ptr`, zero, one, or both of `f80` and `f128`, and `v128` where the `layout` block provides them; storage types are `i8`, `i16`, `i32`, `i64`, `f32`, `f64`, `ptr`, `f80`/`f128`/`v128` where present, named types, and fixed arrays.
+Types are signless — interpretation lives in the verb. The set splits by where a value can live. Register types are `i1`, `i32`, `i64`, `f32`, `f64`, `ptr`, zero, one, or both of `f80` and `f128`, zero, one, or both of the half floats `f16` and `bf16`, and `v128` where the `layout` block provides them; storage types are `i8`, `i16`, `i32`, `i64`, `f32`, `f64`, `ptr`, `f80`/`f128`/`f16`/`bf16`/`v128` where present, named types, and fixed arrays.
 
 `v128` is the whole of the vector type system, and one type is enough because the lane shape is not a property of the register — sixteen bytes are eight words to one instruction and four doublewords to the next. The shape rides in the verb (`v128.i16x8_add`), which is the same place signedness already rides and for the same reason. Nothing is bitcast between vector shapes because there is nothing to bitcast between, which is also what lets a frontend map C's `__m128i`, `__m128` and `__m128d` — one register spelled three ways — onto one type and lose nothing.
 
@@ -46,7 +46,7 @@ Five declaration forms, all shaped `[modifier] keyword @name`: types, globals, f
 
 ## Extension
 
-Three axes are left open: sub-word atomics, pointer atomics, and new metadata kinds — none needs a grammar change. New arithmetic, comparison, memory, and select types mostly arrive as new namespaces over the existing verb set rather than as new verbs, which is the payoff for keeping narrow integers out of the arithmetic namespaces in the first place. Conversions are the standing exception: because a conversion verb names the *other* type as well as the namespace, each new register type adds a verb per existing type it converts with, in both directions. `f80`/`f128` already paid this cost once.
+Three axes are left open: sub-word atomics, pointer atomics, and new metadata kinds — none needs a grammar change. New arithmetic, comparison, memory, and select types mostly arrive as new namespaces over the existing verb set rather than as new verbs, which is the payoff for keeping narrow integers out of the arithmetic namespaces in the first place. Conversions are the standing exception: because a conversion verb names the *other* type as well as the namespace, each new register type adds a verb per existing type it converts with, in both directions. `f80`/`f128` paid this cost first, and `f16`/`bf16` paid it again.
 
 Work-items were the fifth, and arrived as §W: verbs, not registers, because the IR has no register that is not a value; and a scope on atomics rather than a second atomic family, because the operation is the same and only the promise is wider or narrower.
 
