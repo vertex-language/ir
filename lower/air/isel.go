@@ -314,6 +314,9 @@ func (x *fn) arith(in *ir.Inst) error {
 		case ir.VSub:
 			x.def(in, b.Sub(a, c))
 		case ir.VMul:
+			// A multiply stays one, a power of two's too: Apple's compiler
+			// folds an index times an element's size into the address of a
+			// load, which a shift it does not.
 			x.def(in, b.Mul(a, c))
 		}
 	}
@@ -331,6 +334,28 @@ func (x *fn) divide(in *ir.Inst) error {
 	b := x.cur
 	a, d := x.arg(in, 0), x.arg(in, 1)
 	it := x.intType(t)
+	// A divisor that is a constant, not zero and not -1, needs no guard:
+	// the division keeps its constant, which the guard's select would hide.
+	// (Rewriting a power of two as shifts here was measured to slow the
+	// quantized matrix-vector kernels, whose register use it changed; a
+	// kernel wanting shifts writes them.)
+	if c, ok := d.(*am.Const); ok && c.Kind == am.ConstIntKind && c.Bits != 0 {
+		w := width(t)
+		minusOne := c.Bits == mask64(w)
+		if !minusOne || in.Op().Verb == ir.VUDiv || in.Op().Verb == ir.VURem {
+			switch in.Op().Verb {
+			case ir.VSDiv:
+				x.def(in, b.SDiv(a, d))
+			case ir.VUDiv:
+				x.def(in, b.UDiv(a, d))
+			case ir.VSRem:
+				x.def(in, b.SRem(a, d))
+			case ir.VURem:
+				x.def(in, b.URem(a, d))
+			}
+			return nil
+		}
+	}
 	bad := am.Value(b.ICmp(am.EQ, d, am.ConstUint(it, 0)))
 	signed := in.Op().Verb == ir.VSDiv || in.Op().Verb == ir.VSRem
 	if signed {
@@ -682,4 +707,12 @@ func (x *fn) selfCompare(in *ir.Inst) error {
 		return fmt.Errorf("not a float comparison")
 	}
 	return nil
+}
+
+// mask64 is the w low bits set.
+func mask64(w int) uint64 {
+	if w >= 64 {
+		return ^uint64(0)
+	}
+	return 1<<uint(w) - 1
 }
