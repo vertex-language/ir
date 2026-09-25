@@ -418,7 +418,7 @@ func (x *fn) overflow(in *ir.Inst) {
 func (x *fn) shift(in *ir.Inst) {
 	t := in.Op().Type
 	b := x.cur
-	n := b.And(x.arg(in, 1), am.ConstUint(x.intType(t), uint64(width(t)-1)))
+	n := x.shiftCount(x.arg(in, 1), t)
 	switch in.Op().Verb {
 	case ir.VShl:
 		x.def(in, b.Shl(x.arg(in, 0), n))
@@ -427,6 +427,18 @@ func (x *fn) shift(in *ir.Inst) {
 	case ir.VUShr:
 		x.def(in, b.LShr(x.arg(in, 0), n))
 	}
+}
+
+// shiftCount masks a shift's count to the width. A constant count is
+// masked here, so the shift takes a literal count as xcrun's does: Apple's
+// GPU compiler has been seen to drop a shift by 'and 16, 31' outright when
+// the kernel also compares floats.
+func (x *fn) shiftCount(n am.Value, t ir.RegType) am.Value {
+	m := uint64(width(t) - 1)
+	if c, ok := n.(*am.Const); ok && c.Kind == am.ConstIntKind {
+		return am.ConstUint(x.intType(t), c.Bits&m)
+	}
+	return x.cur.And(n, am.ConstUint(x.intType(t), m))
 }
 
 // rotate is two shifts and an or, the second count masked too, so that a
@@ -467,6 +479,9 @@ func (x *fn) compare(in *ir.Inst) error {
 	t := in.Op().Type
 	b := x.cur
 	a, c := x.arg(in, 0), x.arg(in, 1)
+	if t == ir.TypeF32 && in.Arg(0) == in.Arg(1) {
+		return x.selfCompare(in)
+	}
 	if t.IsFloat() {
 		pred := map[ir.Verb]am.Pred{ir.VEq: am.FOEQ, ir.VNe: am.FUNE, ir.VLt: am.FOLT, ir.VLe: am.FOLE, ir.VUno: am.FUNO}
 		p, ok := pred[in.Op().Verb]
@@ -645,4 +660,26 @@ func (x *fn) getaddr(in *ir.Inst) error {
 		return fmt.Errorf("@%s is imported: an AIR library has no other module to link against", s.Name())
 	}
 	return fmt.Errorf("the address of a function: AIR has no function pointers")
+}
+
+// selfCompare lowers a float compared with itself, which asks only whether
+// it is a NaN, as MSL's isnan does: on the bits, as integers. Apple's GPU
+// compiler miscompiles 'fcmp une %f, %f' and its kin: a kernel holding one
+// drops the shift from 'lshr (bitcast %g), 16', for any float %g. xcrun
+// -fno-fast-math's own output for 'f != f' does the same.
+func (x *fn) selfCompare(in *ir.Inst) error {
+	b := x.cur
+	bits := b.And(b.Bitcast(x.arg(in, 0), am.UInt), am.ConstUint(am.UInt, 0x7fffffff))
+	nan := b.ICmp(am.UGT, bits, am.ConstUint(am.UInt, 0x7f800000))
+	switch in.Op().Verb {
+	case ir.VNe, ir.VUno:
+		x.def(in, nan)
+	case ir.VEq, ir.VLe:
+		x.def(in, b.Xor(nan, am.ConstBool(true)))
+	case ir.VLt:
+		x.def(in, am.ConstBool(false))
+	default:
+		return fmt.Errorf("not a float comparison")
+	}
+	return nil
 }

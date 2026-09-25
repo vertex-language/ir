@@ -173,9 +173,9 @@ func (f *Func) usesHalf() bool {
 // halfSource is the half type a conversion verb reads, or TypeNone.
 func halfSource(v Verb) RegType {
 	switch v {
-	case VFCvtF16, VSCvtF16, VUCvtF16, VSCvtSatF16, VUCvtSatF16:
+	case VFCvtF16, VSCvtF16, VUCvtF16, VSCvtSatF16, VUCvtSatF16, VBitcastF16:
 		return TypeF16
-	case VFCvtBF16, VSCvtBF16, VUCvtBF16, VSCvtSatBF16, VUCvtSatBF16:
+	case VFCvtBF16, VSCvtBF16, VUCvtBF16, VSCvtSatBF16, VUCvtSatBF16, VBitcastBF16:
 		return TypeBF16
 	}
 	return TypeNone
@@ -388,6 +388,9 @@ func (p *halfPass) expand(in *Inst) bool {
 		in.op.Type = TypeI32
 		return false
 
+	case VBitcastI32:
+		// The carrier is the encoding: only the low sixteen bits count.
+		return p.replace(in, p.and(a[0], p.i32(0xffff)))
 	case VNeg:
 		return p.replace(in, p.xor(a[0], p.i32(0x8000)))
 	case VAbs:
@@ -423,6 +426,10 @@ func (p *halfPass) expand(in *Inst) bool {
 // fromHalf rewrites a conversion out of a half into the same conversion
 // out of the f32 it widens to exactly.
 func (p *halfPass) fromHalf(in *Inst, src RegType) bool {
+	if in.op.Verb == VBitcastF16 || in.op.Verb == VBitcastBF16 {
+		// The carrier already is the encoding, zero above it.
+		return p.replace(in, in.args[0])
+	}
 	w := p.widen(src, in.args[0])
 	switch in.op.Type {
 	case TypeF32:

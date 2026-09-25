@@ -175,16 +175,18 @@ const (
 	VUCvtSatBF16 Verb = "ucvt_sat_bf16"
 
 	// §C3 float width and bitcast
-	VFCvtF32    Verb = "fcvt_f32"
-	VFCvtF64    Verb = "fcvt_f64"
-	VFCvtF80    Verb = "fcvt_f80"
-	VFCvtF128   Verb = "fcvt_f128"
-	VFCvtF16    Verb = "fcvt_f16"
-	VFCvtBF16   Verb = "fcvt_bf16"
-	VBitcastF32 Verb = "bitcast_f32"
-	VBitcastI32 Verb = "bitcast_i32"
-	VBitcastF64 Verb = "bitcast_f64"
-	VBitcastI64 Verb = "bitcast_i64"
+	VFCvtF32     Verb = "fcvt_f32"
+	VFCvtF64     Verb = "fcvt_f64"
+	VFCvtF80     Verb = "fcvt_f80"
+	VFCvtF128    Verb = "fcvt_f128"
+	VFCvtF16     Verb = "fcvt_f16"
+	VFCvtBF16    Verb = "fcvt_bf16"
+	VBitcastF32  Verb = "bitcast_f32"
+	VBitcastI32  Verb = "bitcast_i32"
+	VBitcastF64  Verb = "bitcast_f64"
+	VBitcastI64  Verb = "bitcast_i64"
+	VBitcastF16  Verb = "bitcast_f16"
+	VBitcastBF16 Verb = "bitcast_bf16"
 
 	// §C4 pointer conversions
 	VFromI64 Verb = "from_i64"

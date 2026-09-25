@@ -418,7 +418,7 @@ func pureVerb(v Verb) bool {
 		VSCvtF16, VSCvtBF16, VUCvtF16, VUCvtBF16,
 		VSCvtSatF16, VSCvtSatBF16, VUCvtSatF16, VUCvtSatBF16,
 		VFCvtF16, VFCvtBF16,
-		VBitcastF32, VBitcastI32, VBitcastF64, VBitcastI64,
+		VBitcastF32, VBitcastI32, VBitcastF64, VBitcastI64, VBitcastF16, VBitcastBF16,
 		VFromI64, VFromPtr, VGetAddr, VSelect:
 		return true
 	}

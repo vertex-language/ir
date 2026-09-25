@@ -254,6 +254,19 @@ func (n F32NS) FCvtBF16(a BF16) F32 { return F32{n.b.def1(Op{TypeF32, VFCvtBF16}
 func (n BF16NS) FCvtF64(a F64) BF16 { return BF16{n.b.def1(Op{TypeBF16, VFCvtF64}, TypeBF16, a.d)} }
 func (n F64NS) FCvtBF16(a BF16) F64 { return F64{n.b.def1(Op{TypeF64, VFCvtBF16}, TypeF64, a.d)} }
 
+// A half's encoding in the low sixteen bits of an i32, zero above them,
+// and back from the low sixteen bits. The one bitcast a half has: an
+// integer register narrower than i32 does not exist, but a sixteen-bit
+// value held in one is how every narrow integer here is held.
+func (n I32NS) BitcastF16(a F16) I32 { return I32{n.b.def1(Op{TypeI32, VBitcastF16}, TypeI32, a.d)} }
+func (n I32NS) BitcastBF16(a BF16) I32 {
+	return I32{n.b.def1(Op{TypeI32, VBitcastBF16}, TypeI32, a.d)}
+}
+func (n F16NS) BitcastI32(a I32) F16 { return F16{n.b.def1(Op{TypeF16, VBitcastI32}, TypeF16, a.d)} }
+func (n BF16NS) BitcastI32(a I32) BF16 {
+	return BF16{n.b.def1(Op{TypeBF16, VBitcastI32}, TypeBF16, a.d)}
+}
+
 // FCvtBF16 and FCvtF16 between the two halves round once: bf16 has the
 // range f16 lacks and f16 the precision bf16 lacks, so neither direction
 // is exact.
