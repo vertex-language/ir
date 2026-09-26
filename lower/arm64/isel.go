@@ -8,6 +8,7 @@ import (
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/ir/lower/globals"
 	"github.com/vertex-language/ir/lower/mir"
+	"github.com/vertex-language/ir/lower/regalloc"
 )
 
 // binOps is every §A verb that is one three-address instruction here.
@@ -475,21 +476,19 @@ func iselTLSAddr(c *cursor, vr *vregs, in *ir.Inst) error {
 	// names it or not: it makes a call, and a value live across it
 	// cannot be in one. The scratch the thunk pointer goes through is
 	// among them, so it needs no vreg of its own.
-	defs := []mir.VReg{x0}
+	clob := &mir.Clobbers{}
 	for _, r := range callerSaved {
-		if site.namedInt(r) {
-			continue
+		if !site.namedInt(r) {
+			clob.Add(int(regalloc.DefaultClass), int(r))
 		}
-		defs = append(defs, site.intReg(r, w64))
 	}
-	defs = append(defs, site.intReg(reg.X30, w64))
+	clob.Add(int(regalloc.DefaultClass), int(reg.X30))
 	for _, r := range callerSavedVec {
-		if site.namedVec(r) {
-			continue
+		if !site.namedVec(r) {
+			clob.Add(int(vecClass), int(r))
 		}
-		defs = append(defs, site.vecReg(r, wf64))
 	}
-	c.Emit(mir.Instr{Op: tlvAddrOp{sym: sym.Name()}, Defs: defs})
+	c.Emit(mir.Instr{Op: tlvAddrOp{sym: sym.Name()}, Defs: []mir.VReg{x0}, Clobbers: clob})
 
 	emitCopy(c, dst, x0, w64)
 	return nil
@@ -563,6 +562,36 @@ func (s *callSite) vecReg(r reg.V, w width) mir.VReg {
 }
 
 func (s *callSite) namedInt(r reg.X) bool { _, ok := s.ints[r]; return ok }
+
+// resultRegs is the registers a call sequence reads back after the call:
+// its results, and an sret aggregate's registers -- in the order the
+// code after the call asks for them.
+func resultRegs(vr *vregs, dsts []mir.VReg, errIdx int, sretAgg *aggregate) (map[reg.X]bool, map[reg.V]bool) {
+	ints, vecs := map[reg.X]bool{}, map[reg.V]bool{}
+	if sretAgg != nil {
+		for k := 0; k < sretAgg.n; k++ {
+			if sretAgg.kind == aggHFA {
+				vecs[aapcsFloatArgs[k]] = true
+			} else {
+				ints[aapcsIntArgs[k]] = true
+			}
+		}
+	}
+	var ni, nf int
+	for i, result := range dsts {
+		if i == errIdx {
+			continue
+		}
+		if vr.widthOfVReg(result).isFloat() {
+			vecs[aapcsFloatArgs[nf]] = true
+			nf++
+		} else {
+			ints[aapcsIntArgs[ni]] = true
+			ni++
+		}
+	}
+	return ints, vecs
+}
 func (s *callSite) namedVec(r reg.V) bool { _, ok := s.vecs[r]; return ok }
 
 // iselCall lowers §G's direct call.
@@ -838,19 +867,32 @@ func emitCallSeq(c *cursor, vr *vregs, places []place,
 	// names it: that is the list of places a value live across it cannot
 	// be. X30 among them, which is the difference from the other
 	// architecture — the link register is a register here, and BL writes it.
+	//
+	// Only the ones read back afterwards -- the results -- are values the
+	// call defines. The rest it only destroys, and they are its clobbers
+	// rather than a vreg each: forty of those per call were most of a
+	// function's vregs.
+	backInt, backVec := resultRegs(vr, dsts, errIdx, sretAgg)
 	defs := append([]mir.VReg(nil), inRegs[len(extraUses):]...)
+	clob := &mir.Clobbers{}
 	for _, r := range callerSaved {
-		if site.namedInt(r) {
-			continue
+		switch {
+		case site.namedInt(r):
+		case backInt[r]:
+			defs = append(defs, site.intReg(r, w64))
+		default:
+			clob.Add(int(regalloc.DefaultClass), int(r))
 		}
-		defs = append(defs, site.intReg(r, w64))
 	}
-	defs = append(defs, site.intReg(reg.X30, w64))
+	clob.Add(int(regalloc.DefaultClass), int(reg.X30))
 	for _, r := range callerSavedVec {
-		if site.namedVec(r) {
-			continue
+		switch {
+		case site.namedVec(r):
+		case backVec[r]:
+			defs = append(defs, site.vecReg(r, wf64))
+		default:
+			clob.Add(int(vecClass), int(r))
 		}
-		defs = append(defs, site.vecReg(r, wf64))
 	}
 
 	// The error register, cleared before the call. The callee writes
@@ -870,7 +912,7 @@ func emitCallSeq(c *cursor, vr *vregs, places []place,
 	if unwindSite >= 0 {
 		c.Emit(mir.Instr{Op: siteOp{site: unwindSite}})
 	}
-	c.Emit(mir.Instr{Op: op, Defs: defs, Uses: inRegs})
+	c.Emit(mir.Instr{Op: op, Defs: defs, Uses: inRegs, Clobbers: clob})
 	if unwindSite >= 0 {
 		c.Emit(mir.Instr{Op: siteOp{site: unwindSite, end: true}})
 	}

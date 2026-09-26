@@ -36,6 +36,10 @@ type Instr struct {
 	Defs []VReg
 	Uses []VReg
 
+	// Clobbers are registers the instruction destroys without leaving a
+	// value in them: a call's caller-saved registers. Nil for most.
+	Clobbers *Clobbers
+
 	// Imm is the instruction's immediate operand, if it has one. A single
 	// int64 covers every immediate this milestone's isel builds; a wider
 	// need is a wider field when something actually needs it.
@@ -129,3 +133,32 @@ func (f *Func) NumVRegs() int { return int(f.next) }
 
 // Emit appends an instruction to the block.
 func (b *Block) Emit(in Instr) { b.Instrs = append(b.Instrs, in) }
+
+// Clobbers is a set of physical registers: for each register class, by
+// its number, a bit per register. A value live across the instruction
+// cannot be in one of them.
+//
+// A call used to name each as a vreg pinned to it and defined by the
+// call, about forty per call site, which made most of a function's vregs
+// and most of the allocator's work. What the allocator needs is where the
+// registers are unavailable, and a set says that.
+type Clobbers [MaxClobberClasses]uint64
+
+// MaxClobberClasses is how many register classes a Clobbers can name.
+const MaxClobberClasses = 4
+
+// Add puts register r of class class in the set.
+func (c *Clobbers) Add(class, r int) { c[class] |= 1 << uint(r) }
+
+// Each calls fn for every register in the set, class by class, in
+// register order.
+func (c *Clobbers) Each(fn func(class, r int)) {
+	for class, mask := range c {
+		for r := 0; mask != 0; r++ {
+			if mask&1 != 0 {
+				fn(class, r)
+			}
+			mask >>= 1
+		}
+	}
+}

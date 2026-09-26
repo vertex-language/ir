@@ -255,6 +255,7 @@ func Spilling(f *mir.Func, pool *Pool, sp Spiller) (map[mir.VReg]PhysReg, error)
 
 // graphSpilling is Spilling by colouring an interference graph.
 func graphSpilling(f *mir.Func, pool *Pool, sp Spiller) (map[mir.VReg]PhysReg, error) {
+	expandClobbers(f, pool)
 	st := &spillState{fresh: map[mir.VReg]bool{}, done: map[mir.VReg]bool{}}
 	for round := 0; ; round++ {
 		assigned, stuck, g, err := colour(f, pool)
@@ -561,6 +562,29 @@ func overlap(g *graph, only, set map[mir.VReg]bool) {
 	for i := range vs {
 		for j := i + 1; j < len(vs); j++ {
 			g.addEdge(vs[i], vs[j])
+		}
+	}
+}
+
+// expandClobbers gives every clobbered register its own vreg, pinned to it
+// and defined by the instruction: the form the graph colourer reads a
+// clobber in, where it is a precoloured node every value live across the
+// instruction interferes with.
+func expandClobbers(f *mir.Func, pool *Pool) {
+	for _, b := range f.Blocks {
+		for i := range b.Instrs {
+			in := &b.Instrs[i]
+			if in.Clobbers == nil {
+				continue
+			}
+			defs := append([]mir.VReg(nil), in.Defs...)
+			in.Clobbers.Each(func(c, r int) {
+				v := f.NewVReg()
+				pool.Classify(v, Class(c))
+				pool.Pin(v, PhysReg(r))
+				defs = append(defs, v)
+			})
+			in.Defs, in.Clobbers = defs, nil
 		}
 	}
 }

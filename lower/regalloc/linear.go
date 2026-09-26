@@ -340,6 +340,29 @@ func linearRound(f *mir.Func, pool *Pool, st *spillState) (map[mir.VReg]PhysReg,
 		}
 		unhandled = append(unhandled, a)
 	}
+	// Clobbered registers: each is unavailable at the instant its
+	// instruction writes, 2k+1, exactly as a vreg pinned there and never
+	// read was.
+	pos := int32(0)
+	for _, b := range f.Blocks {
+		for _, in := range b.Instrs {
+			if in.Clobbers != nil {
+				at := 2*pos + 1
+				in.Clobbers.Each(func(c, r int) {
+					k := key{Class(c), PhysReg(r)}
+					fx := fixedOf[k]
+					if fx == nil {
+						fx = &ivl{v: -1, class: Class(c), reg: PhysReg(r), has: true, fixed: true}
+						fixedOf[k] = fx
+						fixedKeys = append(fixedKeys, k)
+					}
+					fx.ranges = append(fx.ranges, rng{at, at + 1})
+				})
+			}
+			pos++
+		}
+	}
+
 	var inactive, active []*ivl
 	slices.SortFunc(fixedKeys, func(x, y key) int {
 		if x.c != y.c {
@@ -751,6 +774,9 @@ func spillAll(f *mir.Func, pool *Pool, sp Spiller, st *spillState, vs []mir.VReg
 var verifyLinear = os.Getenv("IR_REGALLOC_VERIFY") == "1"
 
 func verifyAssignment(f *mir.Func, pool *Pool, assigned map[mir.VReg]PhysReg) error {
+	if err := verifyClobbers(f, pool, assigned); err != nil {
+		return err
+	}
 	g := interference(f)
 	for _, v := range g.Nodes() {
 		rv, ok := assigned[v]
@@ -774,4 +800,26 @@ func verifyAssignment(f *mir.Func, pool *Pool, assigned map[mir.VReg]PhysReg) er
 		}
 	}
 	return nil
+}
+
+// verifyClobbers checks that no value live across an instruction is in a
+// register the instruction clobbers.
+func verifyClobbers(f *mir.Func, pool *Pool, assigned map[mir.VReg]PhysReg) error {
+	live := mir.Liveness(f)
+	var bad error
+	for _, b := range f.Blocks {
+		live.LiveAfter(b, func(_ int, in mir.Instr, after map[mir.VReg]bool) {
+			if bad != nil || in.Clobbers == nil {
+				return
+			}
+			for v := range after {
+				r, ok := assigned[v]
+				if ok && in.Clobbers[pool.ClassOf(v)]&(1<<uint(r)) != 0 {
+					bad = fmt.Errorf("regalloc: verify: v%d is live across an instruction that clobbers its %v", v, r)
+					return
+				}
+			}
+		})
+	}
+	return bad
 }
