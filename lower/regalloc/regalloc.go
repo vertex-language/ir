@@ -86,9 +86,9 @@ const DefaultClass Class = 0
 // classification places a function's incoming parameters — and the rest
 // free for Assign to hand out.
 type Pool struct {
-	pinned map[mir.VReg]PhysReg
+	pinned pinSet
 	free   map[Class][]PhysReg
-	class  map[mir.VReg]Class
+	class  []Class // by vreg; DefaultClass past the end
 	// allowed narrows a vreg to some of its class's registers: an
 	// operand only some registers can encode, like i386's byte
 	// registers. A vreg not in it may take any register of its class.
@@ -100,9 +100,7 @@ type Pool struct {
 // AddClass.
 func NewPool(regs []PhysReg) *Pool {
 	p := &Pool{
-		pinned: map[mir.VReg]PhysReg{},
-		free:   map[Class][]PhysReg{},
-		class:  map[mir.VReg]Class{},
+		free: map[Class][]PhysReg{},
 	}
 	p.AddClass(DefaultClass, regs)
 	return p
@@ -121,6 +119,9 @@ func (p *Pool) AddClass(c Class, regs []PhysReg) {
 func (p *Pool) Classify(v mir.VReg, c Class) {
 	if c == DefaultClass {
 		return
+	}
+	for int(v) >= len(p.class) {
+		p.class = append(p.class, DefaultClass)
 	}
 	p.class[v] = c
 }
@@ -163,12 +164,47 @@ func (p *Pool) inherit(w, v mir.VReg) {
 }
 
 // ClassOf is v's register file.
-func (p *Pool) ClassOf(v mir.VReg) Class { return p.class[v] }
+func (p *Pool) ClassOf(v mir.VReg) Class {
+	if int(v) < len(p.class) {
+		return p.class[v]
+	}
+	return DefaultClass
+}
 
 // Pin fixes v to r before allocation starts. Assign never reassigns a
 // pinned register, and never gives r to a vreg of the same class that
 // interferes with v.
-func (p *Pool) Pin(v mir.VReg, r PhysReg) { p.pinned[v] = r }
+func (p *Pool) Pin(v mir.VReg, r PhysReg) { p.pinned.set(v, r) }
+
+// A pinSet is the register each pinned vreg is fixed to, indexed by vreg
+// -- dense, as vregs are numbered, where a map cost a hash per vreg and
+// a call site pins some fifty of them.
+type pinSet []PhysReg
+
+const unpinned PhysReg = -1
+
+func (s pinSet) get(v mir.VReg) (PhysReg, bool) {
+	if int(v) < len(s) && s[v] != unpinned {
+		return s[v], true
+	}
+	return 0, false
+}
+
+func (s *pinSet) set(v mir.VReg, r PhysReg) {
+	for int(v) >= len(*s) {
+		*s = append(*s, unpinned)
+	}
+	(*s)[v] = r
+}
+
+// each calls fn for every pinned vreg, in vreg order.
+func (s pinSet) each(fn func(v mir.VReg, r PhysReg)) {
+	for v, r := range s {
+		if r != unpinned {
+			fn(mir.VReg(v), r)
+		}
+	}
+}
 
 // Assign colours f's interference graph and returns the physical register
 // for every VReg it names.
@@ -261,26 +297,30 @@ func colour(f *mir.Func, pool *Pool) (map[mir.VReg]PhysReg, []mir.VReg, *graph, 
 	var stuck []mir.VReg
 
 	assigned := make(map[mir.VReg]PhysReg, len(pool.pinned))
-	for v, r := range pool.pinned {
-		assigned[v] = r
-	}
-	for v, r := range pool.pinned {
+	pool.pinned.each(func(v mir.VReg, r PhysReg) { assigned[v] = r })
+	var pinErr error
+	pool.pinned.each(func(v mir.VReg, r PhysReg) {
+		if pinErr != nil {
+			return
+		}
 		var conflict mir.VReg
 		found := false
 		g.neighbours(v, func(n mir.VReg) {
 			if found {
 				return
 			}
-			other, ok := pool.pinned[n]
+			other, ok := pool.pinned.get(n)
 			if !ok || other != r || pool.ClassOf(n) != pool.ClassOf(v) {
 				return
 			}
 			conflict, found = n, true
 		})
 		if found {
-			return nil, nil, nil, fmt.Errorf("%w: v%d and v%d both want %v",
-				ErrPinConflict, v, conflict, r)
+			pinErr = fmt.Errorf("%w: v%d and v%d both want %v", ErrPinConflict, v, conflict, r)
 		}
+	})
+	if pinErr != nil {
+		return nil, nil, nil, pinErr
 	}
 
 	// Vreg order, so the result is a function of the MIR and not of the

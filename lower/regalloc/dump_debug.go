@@ -16,7 +16,7 @@ func debugDump(f *mir.Func, pool *Pool, assigned map[mir.VReg]PhysReg) {
 	r := func(v mir.VReg) string {
 		p, ok := assigned[v]
 		pin := ""
-		if _, isPin := pool.pinned[v]; isPin {
+		if _, isPin := pool.pinned.get(v); isPin {
 			pin = "!"
 		}
 		if !ok {

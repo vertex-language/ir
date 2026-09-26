@@ -326,7 +326,7 @@ func linearRound(f *mir.Func, pool *Pool, st *spillState) (map[mir.VReg]PhysReg,
 			continue
 		}
 		a.class = pool.ClassOf(a.v)
-		if r, ok := pool.pinned[a.v]; ok {
+		if r, ok := pool.pinned.get(a.v); ok {
 			a.reg, a.has, a.fixed = r, true, true
 			k := key{a.class, r}
 			fx := fixedOf[k]

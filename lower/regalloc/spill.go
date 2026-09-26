@@ -77,7 +77,7 @@ type spillState struct {
 // nor one the rewrite created is eligible — a pin is a fact about where
 // a value has to be, and a rewrite's vregs are already as short as they
 // can get.
-func (st *spillState) pick(v mir.VReg, g *graph, pinned map[mir.VReg]PhysReg) (mir.VReg, bool) {
+func (st *spillState) pick(v mir.VReg, g *graph, pinned pinSet) (mir.VReg, bool) {
 	if st.eligible(v, pinned) {
 		return v, true
 	}
@@ -94,8 +94,8 @@ func (st *spillState) pick(v mir.VReg, g *graph, pinned map[mir.VReg]PhysReg) (m
 	return best, found
 }
 
-func (st *spillState) eligible(v mir.VReg, pinned map[mir.VReg]PhysReg) bool {
-	if _, isPinned := pinned[v]; isPinned {
+func (st *spillState) eligible(v mir.VReg, pinned pinSet) bool {
+	if _, isPinned := pinned.get(v); isPinned {
 		return false
 	}
 	return !st.fresh[v] && !st.done[v]

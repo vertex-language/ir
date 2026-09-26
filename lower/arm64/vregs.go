@@ -88,7 +88,7 @@ type vregs struct {
 	pool *regalloc.Pool
 
 	of    map[*ir.Def]mir.VReg
-	width map[mir.VReg]width
+	width []width // by vreg; zero for one fresh did not make
 
 	// asmIDs numbers the inline asm statements in this function, so two
 	// expansions of one template generate different local labels.
@@ -100,7 +100,7 @@ func newVRegs(mf *mir.Func, pool *regalloc.Pool, n int) *vregs {
 		mf:    mf,
 		pool:  pool,
 		of:    make(map[*ir.Def]mir.VReg, n),
-		width: make(map[mir.VReg]width, n),
+		width: make([]width, 0, n),
 	}
 }
 
@@ -117,6 +117,9 @@ func (v *vregs) define(d *ir.Def) (mir.VReg, error) {
 
 func (v *vregs) fresh(w width) mir.VReg {
 	r := v.mf.NewVReg()
+	for int(r) >= len(v.width) {
+		v.width = append(v.width, 0)
+	}
 	v.width[r] = w
 	v.pool.Classify(r, w.class())
 	return r
@@ -147,7 +150,12 @@ func (v *vregs) lookup(d *ir.Def) (mir.VReg, bool) {
 }
 
 // widthOfVReg is r's width.
-func (v *vregs) widthOfVReg(r mir.VReg) width { return v.width[r] }
+func (v *vregs) widthOfVReg(r mir.VReg) width {
+	if int(r) < len(v.width) {
+		return v.width[r]
+	}
+	return 0
+}
 
 // nextAsmID hands out a number unique within this function, so that two
 // expansions of one inline asm template generate different local labels.
