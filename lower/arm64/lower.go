@@ -274,8 +274,11 @@ func prepareAll(items []ir.Item, opts Options) (ready func(int) (*prepared, erro
 		}, func() {}
 	}
 	// A window of slots: a worker takes the next function only once the
-	// emitter is within the window of it.
-	window := make(chan struct{}, 4*workers)
+	// emitter is within the window of it. It is wide because functions
+	// differ in cost by a thousandfold: while the emitter waits on a large
+	// one, a narrow window left every other worker idle (net/http: 16
+	// per worker is 76 -> 63 ms for 15 MB more at the peak).
+	window := make(chan struct{}, windowSize(workers))
 	next := make(chan int)
 	quit := make(chan struct{})
 	go func() {
@@ -532,4 +535,13 @@ func without(rs []reg.X, drop reg.X) []reg.X {
 		}
 	}
 	return out
+}
+
+// windowSize is how many functions may be prepared ahead of the one
+// being emitted: IR_LOWER_WINDOW, or sixteen per worker.
+func windowSize(workers int) int {
+	if n, err := strconv.Atoi(os.Getenv("IR_LOWER_WINDOW")); err == nil && n > 0 {
+		return n
+	}
+	return 16 * workers
 }

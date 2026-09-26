@@ -49,6 +49,7 @@ import (
 	"math/bits"
 	"os"
 	"slices"
+	"sync"
 
 	"github.com/vertex-language/ir/lower/mir"
 )
@@ -235,18 +236,84 @@ func liveOut(f *mir.Func, n int) []bitset {
 	return out
 }
 
+// scratch is an allocation's working memory, kept from round to round
+// and, through scratchPool, from function to function. A debug build
+// allocates thousands of functions, each more than once where it spills,
+// and making and zeroing tables the size of each one's vreg numbering
+// every round was most of the allocator's time. Only what a round touched
+// is reset for the next.
+type scratch struct {
+	all     []*ivl
+	slab    []ivl        // the intervals all points into, by vreg
+	touched []mir.VReg   // the vregs all holds
+	partner [][]mir.VReg // copy partners, by vreg
+	paired  []mir.VReg   // the vregs partner holds
+	desired []PhysReg
+	// mark is visited-by-generation, and never needs clearing: a new
+	// search takes a new generation.
+	mark []int32
+	gen  int32
+
+	// fixed is each register's fixed interval, by class*64+register;
+	// used lists the ones this round has, in order of first use.
+	fixed [mir.MaxClobberClasses * 64]ivl
+	used  []int
+
+	unhandled, active, inactive []*ivl
+}
+
+var scratchPool = sync.Pool{New: func() any { return new(scratch) }}
+
+// grow makes the per-vreg tables hold n vregs. The functions allocated
+// get fresh vregs as they spill, so n only grows within one.
+func (sc *scratch) grow(n int) {
+	if cap(sc.all) < n {
+		m := n + n/4
+		sc.all = make([]*ivl, m)
+		sc.slab = make([]ivl, m)
+		sc.partner = make([][]mir.VReg, m)
+		sc.desired = make([]PhysReg, m)
+		mark := make([]int32, m)
+		copy(mark, sc.mark)
+		sc.mark = mark
+	}
+	sc.all, sc.slab = sc.all[:n], sc.slab[:n]
+	sc.partner, sc.desired, sc.mark = sc.partner[:n], sc.desired[:n], sc.mark[:n]
+}
+
+// reset clears what the last round left, keeping the memory.
+func (sc *scratch) reset() {
+	for _, v := range sc.touched {
+		a := &sc.slab[v]
+		*a = ivl{ranges: a.ranges[:0]}
+		sc.all[v] = nil
+	}
+	sc.touched = sc.touched[:0]
+	for _, v := range sc.paired {
+		sc.partner[v] = sc.partner[v][:0]
+	}
+	sc.paired = sc.paired[:0]
+	for _, i := range sc.used {
+		fx := &sc.fixed[i]
+		*fx = ivl{ranges: fx.ranges[:0]}
+	}
+	sc.used = sc.used[:0]
+}
+
 // intervals builds every vreg's lifetime, indexed by vreg; nil for one the
 // function never names.
-func intervals(f *mir.Func, n int) []*ivl {
+func intervals(f *mir.Func, n int, sc *scratch) []*ivl {
+	sc.reset()
+	sc.grow(n)
 	out := liveOut(f, n)
-	all := make([]*ivl, n)
-	slab := make([]ivl, n) // one allocation for every interval
+	all, slab := sc.all, sc.slab
 	get := func(v mir.VReg) *ivl {
 		a := all[v]
 		if a == nil {
 			a = &slab[v]
 			a.v = v
 			all[v] = a
+			sc.touched = append(sc.touched, v)
 		}
 		return a
 	}
@@ -274,10 +341,8 @@ func intervals(f *mir.Func, n int) []*ivl {
 			}
 		}
 	}
-	for _, a := range all {
-		if a != nil {
-			slices.Reverse(a.ranges)
-		}
+	for _, v := range sc.touched {
+		slices.Reverse(all[v].ranges)
 	}
 	return all
 }
@@ -285,8 +350,10 @@ func intervals(f *mir.Func, n int) []*ivl {
 // linearSpilling is Spilling by linear scan.
 func linearSpilling(f *mir.Func, pool *Pool, sp Spiller) (map[mir.VReg]PhysReg, error) {
 	st := &spillState{fresh: map[mir.VReg]bool{}, done: map[mir.VReg]bool{}}
+	sc := scratchPool.Get().(*scratch)
+	defer scratchPool.Put(sc)
 	for round := 0; ; round++ {
-		assigned, spill, err := linearRound(f, pool, st)
+		assigned, spill, err := linearRound(f, pool, st, sc)
 		if err != nil {
 			return nil, err
 		}
@@ -308,34 +375,57 @@ func linearSpilling(f *mir.Func, pool *Pool, sp Spiller) (map[mir.VReg]PhysReg, 
 
 // linearRound allocates once. It returns the assignment, or the vregs to
 // spill before trying again.
-func linearRound(f *mir.Func, pool *Pool, st *spillState) (map[mir.VReg]PhysReg, []mir.VReg, error) {
+func linearRound(f *mir.Func, pool *Pool, st *spillState, sc *scratch) (map[mir.VReg]PhysReg, []mir.VReg, error) {
 	n := f.NumVRegs()
-	all := intervals(f, n)
+	all := intervals(f, n, sc)
 
 	// Fixed intervals: every pinned vreg's ranges, one interval per
-	// register of each class.
+	// register of each class. A register outside the dense table (a class
+	// or a number past what a Clobbers holds) is kept in a map.
 	type key struct {
 		c Class
 		r PhysReg
 	}
-	fixedOf := map[key]*ivl{}
 	var fixedKeys []key
-	var unhandled []*ivl
-	for _, a := range all {
-		if a == nil {
-			continue
+	var overflow map[key]*ivl
+	// pinnedRanges counts, per dense fixed interval, the ranges pins gave
+	// it: those come in vreg order, while clobbers come in position order
+	// after them, so an interval with none is sorted already.
+	var pinnedRanges [len(scratch{}.fixed)]int32
+	fixedFor := func(c Class, r PhysReg) (*ivl, int) {
+		if c >= 0 && int(c) < mir.MaxClobberClasses && r >= 0 && r < 64 {
+			i := int(c)*64 + int(r)
+			fx := &sc.fixed[i]
+			if !fx.fixed {
+				*fx = ivl{v: -1, class: c, reg: r, has: true, fixed: true, ranges: fx.ranges[:0]}
+				sc.used = append(sc.used, i)
+				fixedKeys = append(fixedKeys, key{c, r})
+			}
+			return fx, i
 		}
+		k := key{c, r}
+		fx := overflow[k]
+		if fx == nil {
+			if overflow == nil {
+				overflow = map[key]*ivl{}
+			}
+			fx = &ivl{v: -1, class: c, reg: r, has: true, fixed: true}
+			overflow[k] = fx
+			fixedKeys = append(fixedKeys, k)
+		}
+		return fx, -1
+	}
+	unhandled := sc.unhandled[:0]
+	for _, v := range sc.touched {
+		a := all[v]
 		a.class = pool.ClassOf(a.v)
 		if r, ok := pool.pinned.get(a.v); ok {
 			a.reg, a.has, a.fixed = r, true, true
-			k := key{a.class, r}
-			fx := fixedOf[k]
-			if fx == nil {
-				fx = &ivl{v: -1, class: a.class, reg: r, has: true, fixed: true}
-				fixedOf[k] = fx
-				fixedKeys = append(fixedKeys, k)
-			}
+			fx, i := fixedFor(a.class, r)
 			fx.ranges = append(fx.ranges, a.ranges...)
+			if i >= 0 {
+				pinnedRanges[i] += int32(len(a.ranges))
+			}
 			continue
 		}
 		unhandled = append(unhandled, a)
@@ -348,22 +438,20 @@ func linearRound(f *mir.Func, pool *Pool, st *spillState) (map[mir.VReg]PhysReg,
 		for _, in := range b.Instrs {
 			if in.Clobbers != nil {
 				at := 2*pos + 1
-				in.Clobbers.Each(func(c, r int) {
-					k := key{Class(c), PhysReg(r)}
-					fx := fixedOf[k]
-					if fx == nil {
-						fx = &ivl{v: -1, class: Class(c), reg: PhysReg(r), has: true, fixed: true}
-						fixedOf[k] = fx
-						fixedKeys = append(fixedKeys, k)
+				for c, mask := range in.Clobbers {
+					for mask != 0 {
+						r := bits.TrailingZeros64(mask)
+						mask &= mask - 1
+						fx, _ := fixedFor(Class(c), PhysReg(r))
+						fx.ranges = append(fx.ranges, rng{at, at + 1})
 					}
-					fx.ranges = append(fx.ranges, rng{at, at + 1})
-				})
+				}
 			}
 			pos++
 		}
 	}
 
-	var inactive, active []*ivl
+	active, inactive := sc.active[:0], sc.inactive[:0]
 	slices.SortFunc(fixedKeys, func(x, y key) int {
 		if x.c != y.c {
 			return int(x.c) - int(y.c)
@@ -371,8 +459,18 @@ func linearRound(f *mir.Func, pool *Pool, st *spillState) (map[mir.VReg]PhysReg,
 		return int(x.r) - int(y.r)
 	})
 	for _, k := range fixedKeys {
-		fx := fixedOf[k]
-		slices.SortFunc(fx.ranges, func(x, y rng) int { return int(x.from) - int(y.from) })
+		var fx *ivl
+		sorted := false
+		if k.c >= 0 && int(k.c) < mir.MaxClobberClasses && k.r >= 0 && k.r < 64 {
+			i := int(k.c)*64 + int(k.r)
+			fx = &sc.fixed[i]
+			sorted = pinnedRanges[i] == 0
+		} else {
+			fx = overflow[k]
+		}
+		if !sorted {
+			slices.SortFunc(fx.ranges, func(x, y rng) int { return int(x.from) - int(y.from) })
+		}
 		merged := fx.ranges[:1]
 		for _, r := range fx.ranges[1:] {
 			last := &merged[len(merged)-1]
@@ -397,13 +495,19 @@ func linearRound(f *mir.Func, pool *Pool, st *spillState) (map[mir.VReg]PhysReg,
 	})
 
 	// Copy partners, for preferring the register a copy's other end has.
-	partners := make([][]mir.VReg, n)
+	partners := sc.partner
+	pair := func(a, b mir.VReg) {
+		if len(partners[a]) == 0 {
+			sc.paired = append(sc.paired, a)
+		}
+		partners[a] = append(partners[a], b)
+	}
 	for _, b := range f.Blocks {
 		for _, in := range b.Instrs {
 			if in.Copy && len(in.Defs) > 0 && len(in.Uses) > 0 {
 				d, u := in.Defs[0], in.Uses[0]
-				partners[d] = append(partners[d], u)
-				partners[u] = append(partners[u], d)
+				pair(d, u)
+				pair(u, d)
 			}
 		}
 	}
@@ -411,14 +515,14 @@ func linearRound(f *mir.Func, pool *Pool, st *spillState) (map[mir.VReg]PhysReg,
 	// desired is the register a pinned vreg reachable through copies
 	// holds: what a value would like so that its copies vanish. Walked
 	// out from every pin, nearest first.
-	desired := make([]PhysReg, n)
+	desired := sc.desired
 	for i := range desired {
 		desired[i] = -1
 	}
 	var wave []mir.VReg
-	for _, a := range all {
+	for v, a := range all {
 		if a != nil && a.fixed {
-			desired[a.v] = a.reg
+			desired[v] = a.reg
 			wave = append(wave, a.v)
 		}
 	}
@@ -447,8 +551,10 @@ func linearRound(f *mir.Func, pool *Pool, st *spillState) (map[mir.VReg]PhysReg,
 	var frontierBuf []mir.VReg
 
 	var wantedBuf []PhysReg
-	mark := make([]int32, n) // visited, by the generation below
-	gen := int32(0)
+	mark := sc.mark // visited, by the generation below
+	gen := sc.gen
+	defer func() { sc.gen = gen }()
+	defer func() { sc.unhandled, sc.active, sc.inactive = unhandled[:0], active[:0], inactive[:0] }()
 	for ui, cur := range unhandled {
 		pos := cur.start()
 		keep := active[:0]
@@ -629,9 +735,9 @@ func linearRound(f *mir.Func, pool *Pool, st *spillState) (map[mir.VReg]PhysReg,
 	if len(spill) > 0 {
 		return nil, spill, nil
 	}
-	assigned := make(map[mir.VReg]PhysReg, len(all))
-	for _, a := range all {
-		if a != nil && a.has {
+	assigned := make(map[mir.VReg]PhysReg, len(sc.touched))
+	for _, v := range sc.touched {
+		if a := all[v]; a.has {
 			assigned[a.v] = a.reg
 		}
 	}
