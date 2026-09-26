@@ -9,6 +9,7 @@ import (
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/ir/lower/globals"
 	"github.com/vertex-language/ir/lower/mir"
+	"github.com/vertex-language/ir/lower/regalloc"
 )
 
 // binOps is every §A binary verb this package lowers, which is every one
@@ -998,22 +999,52 @@ func iselCallSeq(c *cursor, vr *vregs, what string, spec []abiArg, sig *ir.Sig, 
 	// does have are not in the allocatable set. Either way a float live
 	// across a call is spilled, which is the ABI's answer and not this
 	// package's choice.
+	//
+	// Only those read back afterwards -- the results -- are values the
+	// call defines; the rest it only destroys, and they are its clobbers
+	// rather than a vreg each.
+	backInt, backXmm := map[reg.R64]bool{}, map[reg.Xmm]bool{}
+	for _, pl := range rets {
+		if slot := pl.regs[0]; slot.kind == placeFloat {
+			backXmm[floatRetReg(abi, slot.i)] = true
+		} else {
+			backInt[intRetReg(abi, slot.i)] = true
+		}
+	}
+	if len(spec) > 0 && !spec[0].sret.IsZero() {
+		if agg, regs, err := sretRegs(abi, spec[0].sret, spec[0].sretMem); err == nil && regs {
+			for _, slot := range sretSlots(abi, agg) {
+				if slot.kind == placeFloat {
+					backXmm[floatRetReg(abi, slot.i)] = true
+				} else {
+					backInt[intRetReg(abi, slot.i)] = true
+				}
+			}
+		}
+	}
 	defs := []mir.VReg{rax}
 	defs = append(defs, inRegs...)
+	clob := &mir.Clobbers{}
 	for _, r := range regsFor(abi).callerSaved {
-		if site.namedInt(r) {
-			continue
+		switch {
+		case site.namedInt(r):
+		case backInt[r]:
+			defs = append(defs, site.intReg(r, w64))
+		default:
+			clob.Add(int(regalloc.DefaultClass), int(r))
 		}
-		defs = append(defs, site.intReg(r, w64))
 	}
 	for _, r := range regsFor(abi).xmm {
-		if site.namedXmm(r) {
-			continue
+		switch {
+		case site.namedXmm(r):
+		case backXmm[r]:
+			defs = append(defs, site.xmmReg(r, wf64))
+		default:
+			clob.Add(int(xmmClass), int(r))
 		}
-		defs = append(defs, site.xmmReg(r, wf64))
 	}
 
-	c.Emit(mir.Instr{Op: op, Defs: defs, Uses: uses})
+	c.Emit(mir.Instr{Op: op, Defs: defs, Uses: uses, Clobbers: clob})
 
 	// A result §3.2.3 brought back in registers, into the storage the
 	// caller set aside for it. There is no ir.Def to copy into — the call

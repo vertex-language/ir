@@ -14,6 +14,7 @@ import (
 
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/ir/lower/mir"
+	"github.com/vertex-language/ir/lower/regalloc"
 )
 
 // libcalls is §E's verbs and the C library function each becomes.
@@ -178,22 +179,28 @@ func emitLibcall(c *cursor, vr *vregs, sym string, args []libArg, result mir.VRe
 	// Every caller-saved register, exactly as a written call declares
 	// them: what a library function destroys is what the ABI says, not
 	// what its name suggests.
+	// A float result comes back in XMM0, read after the call: that one
+	// is a value the call defines, the rest only clobbers.
+	floatBack := wantResult && vr.widthOfVReg(result).isFloat()
 	defs := []mir.VReg{rax}
 	defs = append(defs, inRegs...)
+	clob := &mir.Clobbers{}
 	for _, r := range regsFor(abi).callerSaved {
-		if site.namedInt(r) {
-			continue
+		if !site.namedInt(r) {
+			clob.Add(int(regalloc.DefaultClass), int(r))
 		}
-		defs = append(defs, site.intReg(r, w64))
 	}
 	for _, r := range regsFor(abi).xmm {
-		if site.namedXmm(r) {
-			continue
+		switch {
+		case site.namedXmm(r):
+		case floatBack && r == reg.XMM0:
+			defs = append(defs, site.xmmReg(r, wf64))
+		default:
+			clob.Add(int(xmmClass), int(r))
 		}
-		defs = append(defs, site.xmmReg(r, wf64))
 	}
 
-	c.Emit(mir.Instr{Op: callOp{sym: c.prefix + sym}, Defs: defs, Uses: inRegs})
+	c.Emit(mir.Instr{Op: callOp{sym: c.prefix + sym}, Defs: defs, Uses: inRegs, Clobbers: clob})
 
 	if wantResult {
 		w := vr.widthOfVReg(result)
