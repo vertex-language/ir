@@ -72,6 +72,9 @@ package arm64
 
 import (
 	"fmt"
+	"os"
+	"runtime"
+	"strconv"
 
 	arm64asm "github.com/vertex-language/arm64"
 	arm64obj "github.com/vertex-language/arm64/obj"
@@ -193,7 +196,10 @@ func Lower(m *ir.Module, opts Options) (*arm64obj.Object, error) {
 	// them may be one text with a declaration in between.
 	text := am.Section(arm64asm.Text)
 	nasm := 0
-	for _, it := range m.Items() {
+	items := m.Items()
+	ready, stop := prepareAll(items, opts)
+	defer stop()
+	for i, it := range items {
 		switch x := it.(type) {
 		case *ir.Func:
 			// A comdat function is a section of its own, elected on its
@@ -212,7 +218,17 @@ func Lower(m *ir.Module, opts Options) (*arm64obj.Object, error) {
 				}
 				sec = am.ComdatSection(arm64asm.Text.String(), arm64asm.Text, key)
 			}
-			if err := lowerFunc(am, sec, x, opts); err != nil {
+			if _, asm := x.AsmBodyText(); asm {
+				if err := lowerAsmFunc(am, sec, x, opts); err != nil {
+					return nil, err
+				}
+				break
+			}
+			p, err := ready(i)
+			if err != nil {
+				return nil, err
+			}
+			if err := emitFunc(am, sec, p, opts); err != nil {
 				return nil, err
 			}
 		case *ir.ModuleAsm:
@@ -224,6 +240,84 @@ func Lower(m *ir.Module, opts Options) (*arm64obj.Object, error) {
 	}
 
 	return am.Finalize()
+}
+
+// prepareAll prepares every function of items on all the machine's cores,
+// ahead of the caller emitting them in order, and returns how to wait for
+// item i's. At most a window of functions is prepared ahead of the one
+// being emitted, which bounds how much machine IR is alive at once.
+//
+// IR_LOWER_JOBS=1 prepares one function at a time, on the caller's
+// schedule; the output is the same either way.
+func prepareAll(items []ir.Item, opts Options) (ready func(int) (*prepared, error), stop func()) {
+	type result struct {
+		p    *prepared
+		err  error
+		done chan struct{}
+	}
+	var todo []int
+	for i, it := range items {
+		if fn, ok := it.(*ir.Func); ok {
+			if _, asm := fn.AsmBodyText(); !asm {
+				todo = append(todo, i)
+			}
+		}
+	}
+	workers := lowerJobs()
+	results := make(map[int]*result, len(todo))
+	for _, i := range todo {
+		results[i] = &result{done: make(chan struct{})}
+	}
+	if workers <= 1 || len(todo) <= 1 {
+		return func(i int) (*prepared, error) {
+			return prepareFunc(items[i].(*ir.Func), opts)
+		}, func() {}
+	}
+	// A window of slots: a worker takes the next function only once the
+	// emitter is within the window of it.
+	window := make(chan struct{}, 4*workers)
+	next := make(chan int)
+	quit := make(chan struct{})
+	go func() {
+		defer close(next)
+		for _, i := range todo {
+			select {
+			case window <- struct{}{}:
+			case <-quit:
+				return
+			}
+			select {
+			case next <- i:
+			case <-quit:
+				return
+			}
+		}
+	}()
+	for w := 0; w < workers; w++ {
+		go func() {
+			for i := range next {
+				r := results[i]
+				r.p, r.err = prepareFunc(items[i].(*ir.Func), opts)
+				close(r.done)
+			}
+		}()
+	}
+	return func(i int) (*prepared, error) {
+		r := results[i]
+		<-r.done
+		<-window
+		p := r.p
+		r.p = nil
+		return p, r.err
+	}, func() { close(quit) }
+}
+
+// lowerJobs is how many functions are prepared at once.
+func lowerJobs() int {
+	if n, err := strconv.Atoi(os.Getenv("IR_LOWER_JOBS")); err == nil && n > 0 {
+		return n
+	}
+	return runtime.GOMAXPROCS(0)
 }
 
 // checkLayout refuses a module whose layout block is not one this package can
@@ -246,6 +340,18 @@ func checkLayout(m *ir.Module) error {
 
 // lowerFunc runs the full pipeline for one function.
 func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Options) error {
+	if _, ok := fn.AsmBodyText(); ok {
+		return lowerAsmFunc(am, text, fn, opts)
+	}
+	p, err := prepareFunc(fn, opts)
+	if err != nil {
+		return err
+	}
+	return emitFunc(am, text, p, opts)
+}
+
+// lowerAsmFunc emits a function whose body is assembly text.
+func lowerAsmFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Options) error {
 	if body, ok := fn.AsmBodyText(); ok {
 		start := text.Offset()
 		if err := emitAsmBody(text, fn, body); err != nil {
@@ -259,7 +365,26 @@ func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Op
 		}
 		return nil
 	}
+	return nil
+}
 
+// A prepared function is one whose machine code is decided -- selected,
+// allocated, laid out -- and not yet written: everything but the part
+// that appends to the module's shared sections. Preparing is where the
+// time goes and touches nothing but the function, so a module's
+// functions are prepared in parallel and emitted in order.
+type prepared struct {
+	fn       *ir.Func
+	mf       *mir.Func
+	pool     *regalloc.Pool
+	fr       *frame
+	plan     *ehPlan
+	assigned map[mir.VReg]regalloc.PhysReg
+	sv       saves
+}
+
+// prepareFunc runs one function's pipeline up to emission.
+func prepareFunc(fn *ir.Func, opts Options) (*prepared, error) {
 	// Locals a frontend put in frame slots and never took the address of
 	// become registers before the frame is planned, so that they take no
 	// frame space and cost no load or store. See ir.PromoteSlots.
@@ -272,11 +397,11 @@ func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Op
 
 	fr, err := planFrame(fn, opts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	plan, err := planEH(fn)
 	if err != nil {
-		return fmt.Errorf("lower: %w", err)
+		return nil, fmt.Errorf("lower: %w", err)
 	}
 
 	mf := mir.NewFunc()
@@ -286,10 +411,10 @@ func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Op
 
 	entry := mf.NewBlock(blockLabel(fn, fn.Entry().Block()))
 	if err := classifyParams(fn, entry, vr, fr); err != nil {
-		return err
+		return nil, err
 	}
 	if err := classifyBlockParams(fn, vr); err != nil {
-		return err
+		return nil, err
 	}
 
 	blocks := fn.Blocks()
@@ -329,14 +454,14 @@ func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Op
 	}
 	for _, blk := range fn.RPO() {
 		if err := sel(blk); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	// Anything RPO did not reach is unreachable, and is still emitted
 	// — an empty mir block would leave a label with no body behind it.
 	for _, blk := range blocks {
 		if err := sel(blk); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
@@ -344,7 +469,7 @@ func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Op
 
 	assigned, err := regalloc.Spilling(mf, pool, &spiller{fr: fr})
 	if err != nil {
-		return fmt.Errorf("lower: %s: regalloc: %w", fn.Name(), err)
+		return nil, fmt.Errorf("lower: %s: regalloc: %w", fn.Name(), err)
 	}
 	shortcutJumps(mf, assigned, jumpRoots(mf))
 	layoutBlocks(mf)
@@ -355,6 +480,13 @@ func lowerFunc(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, opts Op
 		fr.force = true
 	}
 
+	return &prepared{fn: fn, mf: mf, pool: pool, fr: fr, plan: plan, assigned: assigned, sv: sv}, nil
+}
+
+// emitFunc writes a prepared function into text, with its unwind and
+// exception tables.
+func emitFunc(am *arm64asm.Module, text *arm64asm.Section, p *prepared, opts Options) error {
+	fn, mf, fr, plan, assigned, sv := p.fn, p.mf, p.fr, p.plan, p.assigned, p.sv
 	start := text.Offset()
 	if err := emit(am, text, fn, mf, assigned, fr, sv, plan); err != nil {
 		return err

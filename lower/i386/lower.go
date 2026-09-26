@@ -223,6 +223,7 @@ func lowerFunc(am *i386asm.Module, text *i386asm.Section, fn *ir.Func, opts Opti
 		}
 	}
 
+	restrictBytes(mf, pool)
 	assigned, err := regalloc.Spilling(mf, pool, &spiller{fr: fr})
 	if err != nil {
 		return fmt.Errorf("lower: %s: regalloc: %w", fn.Name(), err)

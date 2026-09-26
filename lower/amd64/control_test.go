@@ -2,6 +2,7 @@ package amd64_test
 
 import (
 	"bytes"
+	"github.com/vertex-language/ir/lower/regalloc"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -384,6 +385,8 @@ func buildSum1N(t *testing.T) *ir.Module {
 }
 
 func TestLowerLoopRoundTrip(t *testing.T) {
+	// A golden encoding of the graph colourer's registers; see lowerText.
+	defer regalloc.UseGraph(regalloc.UseGraph(true))
 	o, err := amd64lower.Lower(buildSum1N(t), amd64lower.Options{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)

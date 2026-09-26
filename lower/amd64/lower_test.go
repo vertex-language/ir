@@ -5,6 +5,7 @@ package amd64_test
 
 import (
 	"bytes"
+	"github.com/vertex-language/ir/lower/regalloc"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,10 @@ func lowerText(t *testing.T, m *ir.Module) (text, object []byte) {
 	if err := verify.Module(m); err != nil {
 		t.Fatalf("verify.Module: %v", err)
 	}
+	// The golden encodings name the registers the graph colourer
+	// chooses; the allocator is not what these tests are about, and
+	// the linear scan's choices are checked by the run tests.
+	defer regalloc.UseGraph(regalloc.UseGraph(true))
 	o, err := amd64lower.Lower(m, amd64lower.Options{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)

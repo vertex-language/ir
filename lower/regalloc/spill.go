@@ -114,7 +114,11 @@ func (st *spillState) spill(f *mir.Func, pool *Pool, sp Spiller, v mir.VReg) {
 	class := pool.ClassOf(v)
 	st.done[v] = true
 
-	fresh := func() mir.VReg { return st.newFresh(f, pool, class) }
+	fresh := func() mir.VReg {
+		w := st.newFresh(f, pool, class)
+		pool.inherit(w, v)
+		return w
+	}
 
 	if def, ok := rematerializable(f, sp, v); ok {
 		st.remat(f, v, def, fresh)

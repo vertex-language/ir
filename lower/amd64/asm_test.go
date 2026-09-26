@@ -15,6 +15,7 @@ package amd64_test
 // allocation. The cases that cannot be pinned check the shape instead.
 
 import (
+	"github.com/vertex-language/ir/lower/regalloc"
 	"strings"
 	"testing"
 
@@ -242,6 +243,10 @@ func lowerText2(t *testing.T, m *ir.Module) ([]byte, error) {
 	if err := verify.Module(m); err != nil {
 		return nil, err
 	}
+	// The golden encodings name the registers the graph colourer
+	// chooses; the allocator is not what these tests are about, and
+	// the linear scan's choices are checked by the run tests.
+	defer regalloc.UseGraph(regalloc.UseGraph(true))
 	o, err := amd64lower.Lower(m, amd64lower.Options{})
 	if err != nil {
 		return nil, err

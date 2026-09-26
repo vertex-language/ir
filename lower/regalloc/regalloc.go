@@ -89,6 +89,10 @@ type Pool struct {
 	pinned map[mir.VReg]PhysReg
 	free   map[Class][]PhysReg
 	class  map[mir.VReg]Class
+	// allowed narrows a vreg to some of its class's registers: an
+	// operand only some registers can encode, like i386's byte
+	// registers. A vreg not in it may take any register of its class.
+	allowed map[mir.VReg][]PhysReg
 }
 
 // NewPool builds a pool whose free list is regs, in the order Assign
@@ -119,6 +123,43 @@ func (p *Pool) Classify(v mir.VReg, c Class) {
 		return
 	}
 	p.class[v] = c
+}
+
+// Restrict narrows v to regs, which must be registers of its class: for
+// an instruction that can only name some of them (on i386 a byte operand
+// has to be EAX, ECX, EDX or EBX). A value reloaded for a spilled v is
+// restricted the same way.
+func (p *Pool) Restrict(v mir.VReg, regs []PhysReg) {
+	if p.allowed == nil {
+		p.allowed = map[mir.VReg][]PhysReg{}
+	}
+	p.allowed[v] = regs
+}
+
+// regsFor is the registers v may take, in the pool's order.
+func (p *Pool) regsFor(v mir.VReg) []PhysReg {
+	free := p.free[p.ClassOf(v)]
+	allow, ok := p.allowed[v]
+	if !ok {
+		return free
+	}
+	out := make([]PhysReg, 0, len(allow))
+	for _, r := range free {
+		for _, a := range allow {
+			if a == r {
+				out = append(out, r)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// inherit gives w, standing in for v after a spill, v's restriction.
+func (p *Pool) inherit(w, v mir.VReg) {
+	if allow, ok := p.allowed[v]; ok {
+		p.Restrict(w, allow)
+	}
 }
 
 // ClassOf is v's register file.
@@ -158,7 +199,26 @@ func Assign(f *mir.Func, pool *Pool) (map[mir.VReg]PhysReg, error) {
 // the rewrite creates are never chosen at all, so the supply of candidates
 // strictly shrinks; the cap below is a guard against a bug in that
 // reasoning rather than the reason it ends.
+//
+// Linear scan does the work (linear.go); IR_REGALLOC=graph selects the
+// graph colourer below instead, which gives better code for a function
+// under heavy pressure and costs far more to run.
 func Spilling(f *mir.Func, pool *Pool, sp Spiller) (map[mir.VReg]PhysReg, error) {
+	var a map[mir.VReg]PhysReg
+	var err error
+	if !useGraph {
+		a, err = linearSpilling(f, pool, sp)
+	} else {
+		a, err = graphSpilling(f, pool, sp)
+	}
+	if err == nil {
+		debugDump(f, pool, a)
+	}
+	return a, err
+}
+
+// graphSpilling is Spilling by colouring an interference graph.
+func graphSpilling(f *mir.Func, pool *Pool, sp Spiller) (map[mir.VReg]PhysReg, error) {
 	st := &spillState{fresh: map[mir.VReg]bool{}, done: map[mir.VReg]bool{}}
 	for round := 0; ; round++ {
 		assigned, stuck, g, err := colour(f, pool)
@@ -234,7 +294,7 @@ func colour(f *mir.Func, pool *Pool) (map[mir.VReg]PhysReg, []mir.VReg, *graph, 
 		// away from it. A neighbour in another class holds a register
 		// that is not one of these, whatever number it goes by.
 		class := pool.ClassOf(v)
-		free := pool.free[class]
+		free := pool.regsFor(v)
 		taken := map[PhysReg]bool{}
 		g.neighbours(v, func(n mir.VReg) {
 			if pool.ClassOf(n) != class {
