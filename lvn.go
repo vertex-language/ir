@@ -256,6 +256,12 @@ func (f *Func) NumberValues() int {
 			for i, a := range t.args {
 				t.args[i] = resolve(a)
 			}
+			if t.op.Verb == VInvoke || t.op.Verb == VInvokeInd || t.op.Verb == VAsmGoto {
+				// An invoke (or asm goto) ends its block: whatever it
+				// writes, the successor it returns to must not read the
+				// memory from before it.
+				st.loads = map[vnKey]*Def{}
+			}
 			if t.op.Verb == VBrIf && t.im != nil && len(t.im.targets) == 2 {
 				c := t.args[0]
 				known, ok := st.facts[c]

@@ -113,6 +113,38 @@ func TestNumberValuesStoreKillsLoads(t *testing.T) {
 	}
 }
 
+// An invoke may write memory like any call: the load after it, in the
+// block it returns to, is not the load before it. (vcx's `b = make(2)`
+// between two reads of b.p, with destructors live, read the old p.)
+func TestNumberValuesInvokeKillsLoads(t *testing.T) {
+	m := ir.NewModule("t", ir.AArch64Linux)
+	set := m.ImportFunc("set", ir.NewSig().Param(ir.TypePtr))
+	cleanup := m.ImportFunc("cleanup", ir.NewSig().Param(ir.TypePtr))
+	personality := m.ImportFunc("personality", ir.NewSig())
+	fn := m.Func("f").Export().Personality(personality)
+	p := fn.ParamPtr("p")
+	fn.ReturnsI64()
+	e := fn.Entry()
+	next := fn.Block("next")
+	pad := fn.Pad("pad", ir.Cleanup)
+	a := e.I64.Load(p)
+	e.Invoke(set, []ir.Value{p}, next.To(), pad)
+	pad.Call(cleanup, p)
+	pad.Resume(pad.Exn())
+	b := next.I64.Load(p)
+	next.Return(next.I64.Add(a, b))
+	if err := m.Err(); err != nil {
+		t.Fatal(err)
+	}
+	fn.NumberValues()
+	if err := verify.Module(m); err != nil {
+		t.Fatal(err)
+	}
+	if c := strings.Count(printedIR(t, m), "i64.load"); c != 2 {
+		t.Errorf("%d loads, want 2", c)
+	}
+}
+
 // A division whose answer is unused still runs: dividing by zero traps.
 func TestDropDeadKeepsATrap(t *testing.T) {
 	m := ir.NewModule("t", ir.AArch64Linux)
