@@ -11,6 +11,7 @@ package amd64_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
@@ -260,5 +261,84 @@ func TestMSRejectsLongDouble(t *testing.T) {
 
 	if _, err := amd64lower.Lower(m, amd64lower.Options{}); err == nil {
 		t.Error("Lower accepted an f128 parameter under the Microsoft ABI")
+	}
+}
+
+// TestMSTailCallJumps. A tail call replaces the frame rather than building
+// one above it: the arguments are placed, the frame comes down, and control
+// jumps to the callee, which returns to this function's caller. So the text
+// ends in a jmp, and nothing in it calls or returns.
+//
+// The argument is an async context, which is what every tail call vsc
+// writes carries, in R14. R14 is callee-saved, so a function that writes it
+// saves it -- but the teardown before the jump must not restore it, or it
+// would put this function's saved copy back over the context it is passing
+// on, and the callee would resume the wrong task.
+func TestMSTailCallJumps(t *testing.T) {
+	m := ir.NewModule("t", ir.X86_64Windows)
+	callee := m.ImportFunc("next", ir.NewSig().Param(ir.TypePtr, ir.SwiftAsync))
+
+	fn := m.Func("f").Export()
+	ctx := fn.ParamPtr("ctx", ir.SwiftAsync)
+	fn.Entry().TailCall(callee, ctx)
+
+	text := textOfMS(t, m)
+	if n := len(text); n < 5 || text[n-5] != 0xE9 {
+		t.Fatalf(".text is % x; want it to end in a jmp rel32", text)
+	}
+	body := text[:len(text)-5]
+	for _, b := range []byte{0xE8, 0xC3} {
+		if bytes.IndexByte(body, b) >= 0 {
+			t.Errorf(".text is % x; a tail call neither calls nor returns", text)
+		}
+	}
+	// mov r14, [rbp+disp8]: REX.W+R, 8B, ModRM 01 110 101.
+	if bytes.Contains(body, []byte{0x4C, 0x8B, 0x75}) {
+		t.Errorf(".text is % x; R14 was restored over the context being passed", text)
+	}
+}
+
+// TestMSTailCallIndirect: an indirect tail call's arguments are the ones
+// after its target, and the target waits in R11 while the frame comes down,
+// so the text ends in jmp r11.
+func TestMSTailCallIndirect(t *testing.T) {
+	m := ir.NewModule("t", ir.X86_64Windows)
+	ft := m.FuncType("cont", ir.NewSig().Param(ir.TypePtr, ir.SwiftAsync).Param(ir.TypeI64))
+
+	fn := m.Func("f").Export()
+	ctx := fn.ParamPtr("ctx", ir.SwiftAsync)
+	target := fn.ParamPtr("target")
+	n := fn.ParamI64("n")
+	fn.Entry().TailCallInd(target, ft, ctx, n)
+
+	text := textOfMS(t, m)
+	// jmp r11: REX.B, FF /4, ModRM 11 100 011.
+	if n := len(text); n < 3 || !bytes.Equal(text[n-3:], []byte{0x41, 0xFF, 0xE3}) {
+		t.Fatalf(".text is % x; want it to end in jmp r11", text)
+	}
+}
+
+// TestMSFallbackLibcallHasAFrame. A verb that becomes a call to the C
+// library -- fma, on the baseline processor that has no FMA3 -- is a call
+// like any other: the function gets a frame, so RSP is aligned at the
+// call, and the 32 bytes of home space every callee on this ABI is owed.
+// Without them fmaf writes its home space over the caller's return
+// address.
+func TestMSFallbackLibcallHasAFrame(t *testing.T) {
+	m := ir.NewModule("t", ir.X86_64Windows)
+	fn := m.Func("f").Export()
+	a := fn.ParamF32("a")
+	b := fn.ParamF32("b")
+	c := fn.ParamF32("c")
+	fn.ReturnsF32()
+	fn.Entry().Return(fn.Entry().F32.FMA(a, b, c))
+
+	text := textOfMS(t, m)
+	// push rbp; mov rbp, rsp; sub rsp, imm32 -- at least the 32 bytes.
+	if len(text) < 11 || !bytes.Equal(text[:7], []byte{0x55, 0x48, 0x8b, 0xec, 0x48, 0x81, 0xec}) {
+		t.Fatalf(".text is % x; want a frame opened before the call", text)
+	}
+	if n := int32(binary.LittleEndian.Uint32(text[7:])); n < 32 {
+		t.Errorf("the frame is %d bytes; the call needs at least 32 of home space", n)
 	}
 }

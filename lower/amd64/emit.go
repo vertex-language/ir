@@ -237,6 +237,37 @@ func emitSaveArea(text *amd64asm.Section, fn *ir.Func, fr *frame) {
 	text.Label(skip)
 }
 
+// emitTeardown is the epilogue without the return: the callee-saved
+// registers back, then RSP and RBP. A return follows it with ret and a tail
+// call with a jmp, and skip is the registers a tail call's arguments are
+// already sitting in, which are not restored over. See carried.
+func emitTeardown(text *amd64asm.Section, fn *ir.Func, fr *frame, saved []reg.R64, skip map[reg.R64]bool) {
+	if !fr.needed() {
+		return
+	}
+	// Restored in the same order they were saved. The slots are
+	// independent, so the order is only for a reader comparing the two
+	// halves.
+	for _, r := range saved {
+		if skip[r] {
+			continue
+		}
+		// A function that may fail leaves its error in R12 for its caller
+		// to read, so R12 is not put back over it. It was still saved: a
+		// frame being unwound past is entitled to its own R12 back, and
+		// the unwind codes say where it is.
+		if r == swiftErrorReg && funcErrorResult(fn) >= 0 {
+			continue
+		}
+		text.MovR64RM64(r, operand.Mem64(reg.RBP).Disp(fr.saveAt[r]))
+	}
+	// leave, which is mov rsp, rbp followed by pop rbp in one byte. Not a
+	// peephole over two instructions this package chose — it is the
+	// epilogue the ISA names, and writing the pair out longhand would be
+	// the deliberate choice needing a reason.
+	text.Leave()
+}
+
 // usedCalleeSaved is the callee-saved registers this function's
 // allocation actually named, in the ABI's own order. Which registers
 // those are is the whole difference the ABI makes here: RDI and RSI are
@@ -553,21 +584,17 @@ func emit(am *amd64asm.Module, text *amd64asm.Section, fn *ir.Func, mf *mir.Func
 				// hung them off Uses, which is the only shape that can
 				// carry two of them across two register files. What is
 				// left is the epilogue, which is the same either way.
-				if fr.needed() {
-					// Restored in the same order they were saved. The
-					// slots are independent, so the order is only for a
-					// reader comparing the two halves.
-					for _, r := range saved {
-						text.MovR64RM64(r, operand.Mem64(reg.RBP).Disp(fr.saveAt[r]))
-					}
-					// leave, which is mov rsp, rbp followed by pop rbp
-					// in one byte. Not a peephole over two instructions
-					// this package chose — it is the epilogue the ISA
-					// names, and writing the pair out longhand would be
-					// the deliberate choice needing a reason.
-					text.Leave()
-				}
+				emitTeardown(text, fn, fr, saved, nil)
 				text.Ret()
+			case tailOp:
+				// A relocation as for callOp, and for the same reasons:
+				// the callee may be in another object or another image.
+				emitTeardown(text, fn, fr, saved, carried(in, r64))
+				text.JmpRef(amd64asm.Ref(op.sym, amd64asm.RefPLT32))
+			case tailIndOp:
+				// The target is in R11, which the teardown does not touch.
+				emitTeardown(text, fn, fr, saved, carried(in, r64))
+				text.JmpRM64(r64(in.Uses[0]))
 			case cmpOp:
 				// UCOMIS rather than CMP in the other file, and the
 				// same instruction either way as far as everything
@@ -807,6 +834,8 @@ func emit(am *amd64asm.Module, text *amd64asm.Section, fn *ir.Func, mf *mir.Func
 					// half of a 64-bit result.
 					text.MovR32RM32(r32(dst), operand.Mem32(base))
 				}
+			case storeTailOp:
+				emitStoreTail(text, op, r64(in.Defs[0]), r64(in.Uses[0]), r64(in.Uses[1]))
 			case subStoreOp:
 				base := r64(in.Uses[1])
 				switch op.to {
@@ -998,6 +1027,9 @@ func emit(am *amd64asm.Module, text *amd64asm.Section, fn *ir.Func, mf *mir.Func
 				default:
 					text.LockCmpxchgRM64R64(operand.Mem64(addr), r64(in.Uses[1]))
 				}
+			case bitCountFallbackOp:
+				u := in.Defs[len(in.Defs)-1]
+				emitBitCountFallback(text, op, r64(in.Defs[0]), r64(in.Defs[1]), r64(u), r64(in.Uses[0]))
 			case bitCountOp:
 				dst, src := in.Defs[0], in.Uses[0]
 				if op.w == w32 {
@@ -1200,4 +1232,26 @@ func emit(am *amd64asm.Module, text *amd64asm.Section, fn *ir.Func, mf *mir.Func
 	}
 	text.EndLabel(fn.Name())
 	return shape, nil
+}
+
+// emitStoreTail writes the low op.bytes bytes of src to base+op.off, lowest
+// first, through a scratch the bytes are shifted down in: four, then two,
+// then one, each as the count calls for. Seven bytes are all three stores;
+// three are the two and the one.
+func emitStoreTail(text *amd64asm.Section, op storeTailOp, t, src, base reg.R64) {
+	text.MovR64RM64(t, src)
+	at := op.off
+	if op.bytes&4 != 0 {
+		text.MovRM32R32(operand.Mem32(base).Disp(at), reg.R32(t))
+		text.ShrRM64Imm8(t, 32)
+		at += 4
+	}
+	if op.bytes&2 != 0 {
+		text.MovRM16R16(operand.Mem16(base).Disp(at), reg.R16(t))
+		text.ShrRM64Imm8(t, 16)
+		at += 2
+	}
+	if op.bytes&1 != 0 {
+		text.MovRM8R8(operand.Mem8(base).Disp(at), reg.R8(t))
+	}
 }

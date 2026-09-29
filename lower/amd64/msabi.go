@@ -178,6 +178,14 @@ func classifyMS(args []abiArg) ([]place, error) {
 	}
 
 	for i, a := range args {
+		// A Swift register, which is beside the sequence rather than
+		// in it: what follows is placed as though this were not there.
+		if p, ok, err := swiftPlace(abiMS, a); err != nil {
+			return nil, err
+		} else if ok {
+			out[i] = p
+			continue
+		}
 		if i == 0 && !a.sret.IsZero() {
 			agg, inRegs, err := msSretInRegs(a.sret)
 			if err != nil {

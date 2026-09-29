@@ -1,6 +1,8 @@
 package amd64
 
 import (
+	"github.com/vertex-language/amd64/feature"
+
 	"fmt"
 
 	"github.com/vertex-language/ir"
@@ -20,10 +22,14 @@ type cursor struct {
 	// call is emitted from wherever isel happens to be, and the cursor is
 	// the one thing every one of those places already holds.
 	prefix string
+
+	// features is the processor, for the verbs whose lowering depends on
+	// it. See fallback.go.
+	features feature.Set
 }
 
-func newCursor(fn *ir.Func, mf *mir.Func, blk *mir.Block, prefix string) *cursor {
-	return &cursor{fn: fn, mf: mf, blk: blk, base: blk.Label, prefix: prefix}
+func newCursor(fn *ir.Func, mf *mir.Func, blk *mir.Block, prefix string, features feature.Set) *cursor {
+	return &cursor{fn: fn, mf: mf, blk: blk, base: blk.Label, prefix: prefix, features: features}
 }
 
 func (c *cursor) Emit(in mir.Instr) { c.blk.Emit(in) }
@@ -104,29 +110,34 @@ func iselBlock(fn *ir.Func, mf *mir.Func, c *cursor, vr *vregs, fr *frame, blk *
 	if fused != nil {
 		return iselBrIf(fn, mf, c, vr, blk, fused, cmp, term)
 	}
-	if term != nil && term.Op().Verb == ir.VBrIf {
+	if term == nil {
+		return fmt.Errorf("a block with no terminator")
+	}
+	switch term.Op().Verb {
+	case ir.VBrIf:
 		return iselBrIfValue(fn, mf, c, vr, blk, term)
-	}
-	if term != nil && term.Op().Verb == ir.VBr {
+	case ir.VBr:
 		return iselBr(fn, mf, c, vr, term)
-	}
-	if term != nil && term.Op().Verb == ir.VBrInd {
+	case ir.VBrInd:
 		return iselBrInd(fn, mf, c, vr, term)
-	}
-	if term != nil && term.Op().Verb == ir.VBrTable {
+	case ir.VBrTable:
 		return iselBrTable(fn, mf, c, vr, term)
-	}
-	if term != nil && term.Op().Verb == ir.VAsmGoto {
+	case ir.VAsmGoto:
 		return iselAsmGoto(fn, mf, c, vr, term)
-	}
-	if term != nil && term.Op().Verb == ir.VTrap {
+	case ir.VTrap:
 		// ud2, which raises #UD. It is a terminator with no successors
 		// and no frame to tear down: control does not leave this
 		// instruction, so there is nothing after it to restore RSP for.
 		c.Emit(mir.Instr{Op: trapOp{}})
 		return nil
+	case ir.VReturn:
+		return iselReturn(fn, c, vr, term)
+	case ir.VTailCall:
+		return iselTailCall(c, vr, term)
+	case ir.VTailCallInd:
+		return iselTailCallInd(c, vr, term)
 	}
-	return iselReturn(fn, c, vr, term)
+	return fmt.Errorf("%s is not a terminator this package lowers", term.Op())
 }
 
 // useIndex is every slot in a function that reads a definition, by
@@ -442,11 +453,26 @@ func readyMove(pending []copyPair) int {
 // iselReturn lowers the block's one other allowed terminator: a return
 // of the values the ABI brings back in registers.
 func iselReturn(fn *ir.Func, c *cursor, vr *vregs, term *ir.Inst) error {
-	if term == nil || term.Op().Verb != ir.VReturn {
-		return fmt.Errorf("only a bare return, a trap, a fused brif, or a br terminator is supported")
-	}
-	args := term.Args()
 	abi := fn.Module().Layout().ABI
+
+	// The error goes in the error register, beside the sequence rather
+	// than in it, so what follows it is placed as though it were not
+	// there. See swift.go.
+	var uses []mir.VReg
+	errIdx := funcErrorResult(fn)
+	if errIdx >= len(term.Args()) {
+		errIdx = -1
+	}
+	if errIdx >= 0 {
+		v, ok := vr.lookup(term.Args()[errIdx])
+		if !ok {
+			return fmt.Errorf("return: operand %d defined outside the function", errIdx)
+		}
+		dst := vr.physical(swiftErrorReg, w64)
+		emitCopy(c, dst, v, w64)
+		uses = append(uses, dst)
+	}
+	args := withoutIndex(term.Args(), errIdx)
 	places, err := classifyRet(abi, typesOf(args))
 	if err != nil {
 		return fmt.Errorf("return: %w", err)
@@ -459,7 +485,6 @@ func iselReturn(fn *ir.Func, c *cursor, vr *vregs, term *ir.Inst) error {
 	// permutation becomes its swap rather than a lost value. Here rather
 	// than in emit because returnOp could only carry one width and one
 	// register file, and these copies carry their own.
-	uses := make([]mir.VReg, 0, len(places))
 	for i, pl := range places {
 		v, ok := vr.lookup(args[i])
 		if !ok {
@@ -503,9 +528,13 @@ func iselReturn(fn *ir.Func, c *cursor, vr *vregs, term *ir.Inst) error {
 					} else {
 						dst = vr.physical(intRetReg(abi, slot.i), slot.w)
 					}
-					if slot.bytes != 0 && slot.bytes < 8 && k == 0 {
+					if k == 0 && slot.kind == placeInt && (slot.bytes == 1 || slot.bytes == 2 || slot.bytes == 4) {
 						// A slot narrower than the register: read its
-						// bytes and no more, zero-extended.
+						// bytes and no more, zero-extended. Another width
+						// -- SysV's three-, five-, six- or seven-byte tail
+						// -- is read whole: the slot is this function's
+						// own, in its frame, and the caller stores back
+						// only the bytes the aggregate has.
 						c.Emit(mir.Instr{
 							Op:   extLoadOp{from: access(slot.bytes), w: slot.w},
 							Defs: []mir.VReg{dst},
@@ -590,7 +619,7 @@ func iselBrTable(fn *ir.Func, mf *mir.Func, c *cursor, vr *vregs, term *ir.Inst)
 		}
 		if len(moves) > 0 {
 			edge := c.open(fmt.Sprintf("table_edge_%d", i))
-			c_edge := newCursor(c.fn, mf, edge, c.prefix)
+			c_edge := newCursor(c.fn, mf, edge, c.prefix, c.features)
 			emitParallelCopy(c_edge, moves)
 			c_edge.to(mf.Block(blockLabel(fn, targets[i].Block())))
 			targetLabels[i] = edge.Label
@@ -610,7 +639,7 @@ func iselBrTable(fn *ir.Func, mf *mir.Func, c *cursor, vr *vregs, term *ir.Inst)
 	var defLabel string
 	if len(defMoves) > 0 {
 		edge := c.open("table_edge_def")
-		c_edge := newCursor(c.fn, mf, edge, c.prefix)
+		c_edge := newCursor(c.fn, mf, edge, c.prefix, c.features)
 		emitParallelCopy(c_edge, defMoves)
 		c_edge.to(mf.Block(blockLabel(fn, defTarget.Block())))
 		defLabel = edge.Label

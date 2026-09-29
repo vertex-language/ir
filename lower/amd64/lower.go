@@ -130,8 +130,9 @@
 //     popcnt, clz and ctz are ordinary integer verbs whose instructions
 //     carry CPUID bits, so lowering one is a question about the
 //     processor and not only about the module — and Options.Features is
-//     where the caller answers it. Refused rather than expanded where
-//     the answer is no; see checkFeatures.
+//     where the caller answers it. Where the answer is no, the verb
+//     is expanded the way LLVM expands it for the baseline; see
+//     fallback.go.
 //   - 29, the float verbs that were left. §C2's unsigned and saturating
 //     conversions, which are sequences and not instructions — there is
 //     no unsigned row in the silicon before AVX-512, and a saturating
@@ -327,24 +328,9 @@ func (o Options) features() feature.Set {
 	return o.Features
 }
 
-// gatedVerbs is the §A6 verbs whose instruction carries a CPUID bit.
-var gatedVerbs = map[ir.Verb]feature.Feature{
-	ir.VPopcnt:  feature.POPCNT,
-	ir.VClz:     feature.LZCNT,
-	ir.VCtz:     feature.BMI1,
-	ir.VFMA:     feature.FMA,
-	ir.VCeil:    feature.SSE41,
-	ir.VFloor:   feature.SSE41,
-	ir.VTrunc:   feature.SSE41,
-	ir.VNearest: feature.SSE41,
-}
-
 // Lower builds an AMD64 object from m.
 func Lower(m *ir.Module, opts Options) (*amd64obj.Object, error) {
 	if err := checkLayout(m); err != nil {
-		return nil, err
-	}
-	if err := checkFeatures(m, opts.features()); err != nil {
 		return nil, err
 	}
 
@@ -365,7 +351,7 @@ func Lower(m *ir.Module, opts Options) (*amd64obj.Object, error) {
 		}
 		am.Extern(g.Name())
 	}
-	for _, sym := range libcallSyms(m, opts.LibcallPrefix) {
+	for _, sym := range libcallSyms(m, opts.LibcallPrefix, opts.features()) {
 		am.Extern(sym)
 	}
 	for _, sym := range softFloatSyms(m, opts.LibcallPrefix) {
@@ -435,27 +421,6 @@ func checkLayout(m *ir.Module) error {
 	return nil
 }
 
-// checkFeatures refuses a module that uses an instruction the target
-// processor does not have.
-func checkFeatures(m *ir.Module, set feature.Set) error {
-	var bad error
-	for _, fn := range m.Funcs() {
-		fn.WalkInsts(func(in *ir.Inst) bool {
-			g, gated := gatedVerbs[in.Op().Verb]
-			if !gated || set.Has(g) {
-				return true
-			}
-			bad = fmt.Errorf("lower: %s: %s needs %v, which Options.Features does not have (the set is %s)",
-				fn.Name(), in.Op(), g, set)
-			return false
-		})
-		if bad != nil {
-			return bad
-		}
-	}
-	return nil
-}
-
 // lowerFunc runs the full pipeline for one function: frame planning,
 // isel, register allocation, and emission.
 func lowerFunc(am *amd64asm.Module, text *amd64asm.Section, fn *ir.Func, opts Options) error {
@@ -463,7 +428,7 @@ func lowerFunc(am *amd64asm.Module, text *amd64asm.Section, fn *ir.Func, opts Op
 		return emitAsmBody(text, fn, body)
 	}
 
-	fr, err := planFrame(fn)
+	fr, err := planFrame(fn, opts.features())
 	if err != nil {
 		return err
 	}
@@ -509,7 +474,7 @@ func lowerFunc(am *amd64asm.Module, text *amd64asm.Section, fn *ir.Func, opts Op
 			return nil
 		}
 		done[i] = true
-		if err := iselBlock(fn, mf, newCursor(fn, mf, mbs[i], opts.LibcallPrefix), vr, fr, blk, uses); err != nil {
+		if err := iselBlock(fn, mf, newCursor(fn, mf, mbs[i], opts.LibcallPrefix, opts.features()), vr, fr, blk, uses); err != nil {
 			return fmt.Errorf("lower: %s: %w", fn.Name(), err)
 		}
 		return nil

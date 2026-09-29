@@ -242,7 +242,7 @@ func iselVaArg(c *cursor, vr *vregs, in *ir.Inst) error {
 
 	// The register arm: the save area plus this file's offset, and the
 	// offset advanced past what was taken.
-	reg := newCursor(c.fn, c.mf, inReg, c.prefix)
+	reg := newCursor(c.fn, c.mf, inReg, c.prefix, c.features)
 	base := vr.temp(w64)
 	reg.Emit(mir.Instr{Op: loadAtOp{off: vaListRegSave, w: w64}, Defs: []mir.VReg{base}, Uses: []mir.VReg{ap}})
 	wide := vr.temp(w64)
@@ -258,7 +258,7 @@ func iselVaArg(c *cursor, vr *vregs, in *ir.Inst) error {
 	// The memory arm: the overflow pointer, advanced one eightbyte
 	// whatever the width — the same rule that gives a stack argument
 	// eight bytes on the way in.
-	mem := newCursor(c.fn, c.mf, inMem, c.prefix)
+	mem := newCursor(c.fn, c.mf, inMem, c.prefix, c.features)
 	mem.Emit(mir.Instr{Op: loadAtOp{off: vaListOverflow, w: w64}, Defs: []mir.VReg{addr}, Uses: []mir.VReg{ap}})
 	next := vr.temp(w64)
 	mem.Emit(mir.Instr{Op: leaAtOp{off: 8}, Defs: []mir.VReg{next}, Uses: []mir.VReg{addr}})
@@ -288,6 +288,8 @@ func msVaTailOff(fn *ir.Func) (int32, error) {
 	for _, p := range places {
 		var next int
 		switch {
+		case p.kind == placeFixed:
+			continue // a Swift register, beside the sequence
 		case len(p.regs) > 0:
 			next = p.regs[0].i + 1
 		case p.kind == placeStack:

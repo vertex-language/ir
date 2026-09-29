@@ -6,8 +6,6 @@ package amd64
 // this architecture's.
 
 import (
-	"fmt"
-
 	amd64asm "github.com/vertex-language/amd64"
 
 	"github.com/vertex-language/ir"
@@ -104,12 +102,14 @@ func (g globalSection) PtrTo(sym string, addend int64) error {
 	return nil
 }
 
-// Delta places a four-byte field holding to - from. This backend's
-// assembler folds a same-section pair through LabelDiff and has no way to
-// spell one it cannot fold, so a difference that needs a relocation is
-// refused by name rather than dropped.
+// Delta places a four-byte field holding to - from, plus the addend the
+// field carries. from is the global being defined -- a relative pointer is
+// measured from its own field -- and to may be anywhere: the assembler folds
+// a pair in one section and writes a PC-relative reference otherwise. See
+// amd64.Section.SymDelta.
 func (g globalSection) Delta(to, from string, addend int64) error {
-	return fmt.Errorf("a symbol difference between %s and %s needs a relocation this backend does not emit yet", to, from)
+	g.s.SymDelta(to, from, addend)
+	return nil
 }
 
 // lowerGlobals writes every global definition in m into am.

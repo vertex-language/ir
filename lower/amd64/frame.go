@@ -3,6 +3,7 @@ package amd64
 import (
 	"fmt"
 
+	"github.com/vertex-language/amd64/feature"
 	"github.com/vertex-language/amd64/reg"
 
 	"github.com/vertex-language/ir"
@@ -137,7 +138,7 @@ const (
 
 // planFrame assigns every ptr.alloc in fn a slot and returns the frame
 // they add up to.
-func planFrame(fn *ir.Func) (*frame, error) {
+func planFrame(fn *ir.Func, features feature.Set) (*frame, error) {
 	fr := &frame{slot: map[*ir.Inst]int32{}}
 
 	// A function with parameters SysV left on the stack reads them from
@@ -186,21 +187,14 @@ func planFrame(fn *ir.Func) (*frame, error) {
 	off := fr.next
 	for _, blk := range fn.Blocks() {
 		for _, in := range blk.Insts() {
-			if softFloatCalls(in) {
-				// Only the f128 operations that actually call: a
-				// literal is a MOVAPS and the sign verbs are one
-				// logical instruction.
-				fr.force = true
-				continue
-			}
-			if _, isLibcall := libcalls[in.Op().Verb]; isLibcall {
-				// A bulk-memory verb is a call to the C library, so it
-				// wants the same aligned RSP a written call does.
+			if callsLibrary(in, features) {
+				// A verb that becomes a call to the C library wants the
+				// same aligned RSP a written call does.
 				fr.force = true
 				if fn.Module().Layout().ABI == abiMS {
-					// Except for the home space, which every call on
-					// this ABI reserves whether the callee writes it or
-					// not — a libcall is a call.
+					// And the home space, which every call on this ABI
+					// reserves whether the callee writes it or not -- a
+					// libcall is a call.
 					fr.reserveOutArgs(msShadow)
 				}
 				continue
@@ -337,11 +331,12 @@ func namedPlaces(fn *ir.Func) (ints, floats int, stackBytes uint64, err error) {
 			continue
 		}
 		for _, r := range p.regs {
-			if r.kind == placeFloat {
+			switch r.kind {
+			case placeFloat:
 				floats++
-				continue
+			case placeInt:
+				ints++
 			}
-			ints++
 		}
 	}
 	return ints, floats, stackBytes, nil
@@ -377,10 +372,17 @@ func callStackBytes(in *ir.Inst) uint64 {
 // everything after the callee its first operand names.
 func callArgs(in *ir.Inst) []*ir.Def {
 	args := in.Args()
-	if in.Op().Verb == ir.VCallInd {
+	if indirectCall(in) {
 		return args[1:]
 	}
 	return args
+}
+
+// indirectCall reports whether a call names its callee by an operand
+// rather than a symbol, and so takes its signature from a func type.
+func indirectCall(in *ir.Inst) bool {
+	v := in.Op().Verb
+	return v == ir.VCallInd || v == ir.VTailCallInd
 }
 
 // typesOf is the types of a list of values, which is what the two
@@ -432,6 +434,10 @@ type abiArg struct {
 	// float in the tail through both register files, and this is how it
 	// knows which floats are in the tail.
 	vararg bool
+
+	// role is the Swift register this parameter travels in by
+	// declaration, beside the argument sequence rather than in it.
+	role swiftRole
 }
 
 // scalarArgs is a list of plain values, with no byval among them.
@@ -480,6 +486,14 @@ func classifySysV(args []abiArg) ([]place, error) {
 	}
 
 	for i, a := range args {
+		// A Swift register, which is beside the sequence rather than
+		// in it: what follows is placed as though this were not there.
+		if p, ok, err := swiftPlace(abiSysV, a); err != nil {
+			return nil, err
+		} else if ok {
+			out[i] = p
+			continue
+		}
 		if i == 0 && !a.sret.IsZero() {
 			agg, inRegs, err := sretInRegs(a.sret, a.sretMem)
 			if err != nil {
@@ -717,17 +731,27 @@ func sretInRegs(t ir.FType, memory bool) (aggregate, bool, error) {
 // sretRetSlots is where each eightbyte of a register-returned aggregate comes
 // back: the integer classes into RAX and RDX in order, the SSE ones into XMM0
 // and XMM1, counted separately the way §3.2.3 counts the argument files.
+//
+// The last eightbyte of an aggregate whose size is not a multiple of eight
+// carries only what is left of it, and says so in bytes: a three-byte struct
+// comes back in the low three bytes of RAX, and the storage it goes to has
+// room for three.
 func sretRetSlots(agg aggregate) []regSlot {
 	var ints, floats int
 	out := make([]regSlot, 0, len(agg.classes))
-	for _, c := range agg.classes {
+	for k, c := range agg.classes {
+		var slot regSlot
 		if c == classSSE {
-			out = append(out, regSlot{kind: placeFloat, i: floats, w: wf64})
+			slot = regSlot{kind: placeFloat, i: floats, w: wf64}
 			floats++
-			continue
+		} else {
+			slot = regSlot{kind: placeInt, i: ints, w: w64}
+			ints++
 		}
-		out = append(out, regSlot{kind: placeInt, i: ints, w: w64})
-		ints++
+		if rest := agg.size - uint64(k)*8; rest < 8 {
+			slot.bytes = rest
+		}
+		out = append(out, slot)
 	}
 	return out
 }
@@ -746,6 +770,7 @@ func paramArgs(fn *ir.Func) []abiArg {
 		for i := range out {
 			if i < len(sp) {
 				out[i].byval = byvalOf(sp[i].Attrs)
+				out[i].role = roleOf(sp[i].Attrs)
 			}
 		}
 		if len(out) > 0 {
@@ -780,6 +805,7 @@ func callArgSpec(in *ir.Inst) []abiArg {
 	for i := range out {
 		if i < len(ps) {
 			out[i].byval = byvalOf(ps[i].Attrs)
+			out[i].role = roleOf(ps[i].Attrs)
 			continue
 		}
 		out[i].vararg = sig.IsVariadic()
@@ -793,7 +819,7 @@ func callArgSpec(in *ir.Inst) []abiArg {
 // calleeSig is the signature a call is made against, which is the
 // callee's for a direct call and the func typedef's for an indirect one.
 func calleeSig(in *ir.Inst) *ir.Sig {
-	if in.Op().Verb == ir.VCallInd {
+	if indirectCall(in) {
 		if t := in.NamedType(); t != nil {
 			return t.Sig()
 		}
@@ -839,7 +865,7 @@ func classifyParams(fn *ir.Func, entry *mir.Block, vr *vregs, fr *frame) error {
 		if slot.kind == placeFloat {
 			incoming = vr.physicalXmm(floatArgReg(abi, slot.i), slot.w)
 		} else {
-			incoming = vr.physical(intArgReg(abi, slot.i), slot.w)
+			incoming = vr.physical(argIntReg(abi, slot), slot.w)
 		}
 		emitCopy(entry, v, incoming, slot.w)
 	}
@@ -940,3 +966,23 @@ func classifyBlockParams(fn *ir.Func, vr *vregs) error {
 
 // wideVector reports whether t occupies a whole vector register.
 func wideVector(t ir.RegType) bool { return t == ir.TypeF128 || t == ir.TypeV128 }
+
+// callsLibrary reports whether an instruction the module did not write as a
+// call becomes one: a bulk-memory verb, an f128 operation that is soft
+// float -- only those that call: a literal is a MOVAPS and the sign verbs
+// are one logical instruction -- or a verb whose instruction this processor
+// does not have (see fallback.go).
+func callsLibrary(in *ir.Inst, features feature.Set) bool {
+	if _, ok := libcalls[in.Op().Verb]; ok {
+		return true
+	}
+	if softFloatCalls(in) {
+		return true
+	}
+	if len(in.Results()) == 1 {
+		if _, ok := fallbackLibcall(features, in.Op().Verb, in.Result(0).Type()); ok {
+			return true
+		}
+	}
+	return false
+}

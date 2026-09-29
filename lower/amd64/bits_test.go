@@ -121,28 +121,34 @@ func TestLowerByteSwap(t *testing.T) {
 	objdumpHas(t, "bs", raw, "bswapq")
 }
 
-// A gated verb against a target that does not have it is refused, and
-// refused before a single instruction is selected — what is wrong is the
-// pairing of the module with the target, and finding that out halfway
-// through a function would be finding it out late.
-//
-// Refused rather than expanded. A frontend that wants popcnt on a
-// baseline processor wants a libcall or an open-coded sequence, and
-// neither exists here; emitting an instruction the target may not have
-// is the one answer that would be wrong.
-func TestLowerRefusesGatedVerbsOffTarget(t *testing.T) {
+// A gated verb lowers on every processor: to its instruction where the
+// processor has it, and where it does not, to the sequence LLVM writes for
+// the baseline -- BSR and BSF with a conditional move for zero, and the SWAR
+// sum for popcnt. Emitting the instruction anyway would be the one wrong
+// answer: LZCNT on a processor without it decodes as BSR, which answers a
+// different question and says nothing.
+func TestGatedVerbsFallBackOffTarget(t *testing.T) {
+	var (
+		popcnt = []byte{0xf3, 0x0f, 0xb8}
+		lzcnt  = []byte{0xf3, 0x0f, 0xbd}
+		tzcnt  = []byte{0xf3, 0x0f, 0xbc}
+		bsr    = []byte{0x0f, 0xbd}
+		bsf    = []byte{0x0f, 0xbc}
+		imul   = []byte{0x69} // imul r32, r/m32, imm32: the byte sum
+	)
 	for _, tc := range []struct {
-		name string
-		emit func(b *ir.Block, x ir.I32) ir.I32
-		set  feature.Set
-		ok   bool
+		name    string
+		emit    func(b *ir.Block, x ir.I32) ir.I32
+		set     feature.Set
+		want    []byte
+		wantNot []byte
 	}{
-		{"popcnt on the baseline", func(b *ir.Block, x ir.I32) ir.I32 { return b.I32.Popcnt(x) }, feature.Default(), false},
-		{"popcnt on v2", func(b *ir.Block, x ir.I32) ir.I32 { return b.I32.Popcnt(x) }, feature.NewSet(feature.V2), true},
-		{"clz on v2", func(b *ir.Block, x ir.I32) ir.I32 { return b.I32.Clz(x) }, feature.NewSet(feature.V2), false},
-		{"clz on v3", func(b *ir.Block, x ir.I32) ir.I32 { return b.I32.Clz(x) }, feature.NewSet(feature.V3), true},
-		{"ctz on v3", func(b *ir.Block, x ir.I32) ir.I32 { return b.I32.Ctz(x) }, feature.NewSet(feature.V3), true},
-		{"bswap on the baseline", func(b *ir.Block, x ir.I32) ir.I32 { return b.I32.Bswap(x) }, feature.Default(), true},
+		{"popcnt on the baseline", func(b *ir.Block, x ir.I32) ir.I32 { return b.I32.Popcnt(x) }, feature.Default(), imul, popcnt},
+		{"popcnt on v2", func(b *ir.Block, x ir.I32) ir.I32 { return b.I32.Popcnt(x) }, feature.NewSet(feature.V2), popcnt, nil},
+		{"clz on v2", func(b *ir.Block, x ir.I32) ir.I32 { return b.I32.Clz(x) }, feature.NewSet(feature.V2), bsr, lzcnt},
+		{"clz on v3", func(b *ir.Block, x ir.I32) ir.I32 { return b.I32.Clz(x) }, feature.NewSet(feature.V3), lzcnt, nil},
+		{"ctz on the baseline", func(b *ir.Block, x ir.I32) ir.I32 { return b.I32.Ctz(x) }, feature.Default(), bsf, tzcnt},
+		{"ctz on v3", func(b *ir.Block, x ir.I32) ir.I32 { return b.I32.Ctz(x) }, feature.NewSet(feature.V3), tzcnt, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := ir.NewModule("t", ir.X86_64Linux)
@@ -151,28 +157,65 @@ func TestLowerRefusesGatedVerbsOffTarget(t *testing.T) {
 			fn.ReturnsI32()
 			fn.Entry().Return(tc.emit(fn.Entry(), x))
 
-			_, err := amd64lower.Lower(m, amd64lower.Options{Features: tc.set})
-			if tc.ok && err != nil {
-				t.Errorf("Lower = %v, want it to lower", err)
+			text := lowerFor(t, m, tc.set)
+			if !bytes.Contains(text, tc.want) {
+				t.Errorf(".text is % x; want % x in it", text, tc.want)
 			}
-			if !tc.ok && err == nil {
-				t.Error("Lower should refuse an instruction the target does not have")
+			if tc.wantNot != nil && bytes.Contains(text, tc.wantNot) {
+				t.Errorf(".text is % x; % x is an instruction this processor does not have", text, tc.wantNot)
 			}
 		})
 	}
 }
 
 // The zero Options is the baseline, which is what a caller who says
-// nothing about the processor gets — and not an empty set, which would
-// describe no processor at all.
+// nothing about the processor gets -- and not an empty set, which would
+// describe no processor at all. So popcnt is the sequence and not POPCNT.
 func TestLowerDefaultsToTheBaseline(t *testing.T) {
 	m := ir.NewModule("t", ir.X86_64Linux)
 	fn := m.Func("f").Export()
-	x := fn.ParamI32("a")
-	fn.ReturnsI32()
-	fn.Entry().Return(fn.Entry().I32.Popcnt(x))
+	x := fn.ParamI64("a")
+	fn.ReturnsI64()
+	fn.Entry().Return(fn.Entry().I64.Popcnt(x))
 
-	if _, err := amd64lower.Lower(m, amd64lower.Options{}); err == nil {
-		t.Error("popcnt should be refused when Options names no processor")
+	var unset feature.Set
+	if text := lowerFor(t, m, unset); bytes.Contains(text, []byte{0xf3, 0x48, 0x0f, 0xb8}) {
+		t.Errorf(".text is % x; POPCNT is not a baseline instruction", text)
+	}
+}
+
+// The float verbs whose instructions are SSE4.1's and FMA3's are calls to
+// the C library on a processor without them, which is what they are
+// defined to be.
+func TestFloatVerbsCallTheLibraryOffTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		emit func(b *ir.Block, x ir.F64) ir.F64
+		sym  string
+	}{
+		{"trunc", func(b *ir.Block, x ir.F64) ir.F64 { return b.F64.Trunc(x) }, "trunc"},
+		{"floor", func(b *ir.Block, x ir.F64) ir.F64 { return b.F64.Floor(x) }, "floor"},
+		{"ceil", func(b *ir.Block, x ir.F64) ir.F64 { return b.F64.Ceil(x) }, "ceil"},
+		{"nearest", func(b *ir.Block, x ir.F64) ir.F64 { return b.F64.Nearest(x) }, "nearbyint"},
+		{"fma", func(b *ir.Block, x ir.F64) ir.F64 { return b.F64.FMA(x, x, x) }, "fma"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := ir.NewModule("t", ir.X86_64Linux)
+			fn := m.Func("f").Export()
+			x := fn.ParamF64("a")
+			fn.ReturnsF64()
+			fn.Entry().Return(tc.emit(fn.Entry(), x))
+
+			if err := verify.Module(m); err != nil {
+				t.Fatalf("verify.Module: %v", err)
+			}
+			o, err := amd64lower.Lower(m, amd64lower.Options{})
+			if err != nil {
+				t.Fatalf("Lower: %v", err)
+			}
+			if sym, ok := o.Symbol(tc.sym); !ok || sym.Defined() {
+				t.Errorf("no undefined %s in the object; the baseline has no instruction for it", tc.sym)
+			}
+		})
 	}
 }

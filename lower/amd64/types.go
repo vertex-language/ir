@@ -1,6 +1,8 @@
 package amd64
 
 import (
+	"github.com/vertex-language/amd64/reg"
+
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/ir/lower/asmtmpl"
 	"github.com/vertex-language/ir/lower/mir"
@@ -153,8 +155,17 @@ type (
 	// here: isel pins them into their registers and they reach this as
 	// Uses, which is what keeps the copies alive to it.
 	returnOp struct{}
-	cmpOp    struct{ w width }
-	brccOp   struct {
+
+	// tailOp is a call that replaces this frame rather than building one
+	// above it: the epilogue, then a jmp to the symbol, so the callee
+	// returns to this function's caller. See tailcall.go.
+	tailOp struct{ sym string }
+
+	// tailIndOp is tailOp through a pointer, which is in R11 by the time
+	// the frame is gone: Uses[0].
+	tailIndOp struct{}
+	cmpOp     struct{ w width }
+	brccOp    struct {
 		cond      condCode
 		then, els string // fully-qualified amd64 section labels
 	}
@@ -179,9 +190,18 @@ type (
 		signed bool
 		w      width
 	}
-	subStoreOp struct{ to access }     // the low `to` bytes of Uses[0]
-	jmpOp      struct{ target string } // fully-qualified amd64 section label
-	constOp    struct {
+	subStoreOp struct{ to access } // the low `to` bytes of Uses[0]
+
+	// storeTailOp writes the low 1-7 bytes of Uses[0] to Uses[1]+off: the
+	// last eightbyte of an aggregate that came back in a register, into
+	// storage exactly as long as the aggregate. Defs[0] is a scratch the
+	// bytes are shifted down through, four, two and one at a time.
+	storeTailOp struct {
+		off   int32
+		bytes int
+	}
+	jmpOp   struct{ target string } // fully-qualified amd64 section label
+	constOp struct {
 		imm int64
 		w   width
 	}
@@ -444,6 +464,7 @@ const (
 	placeInt   placeKind = iota // one of the six integer registers
 	placeFloat                  // one of the eight SSE registers
 	placeStack                  // the caller's outgoing area
+	placeFixed                  // a Swift register, by declaration; see swift.go
 )
 
 // A regSlot is one register an argument occupies: which file, which
@@ -453,6 +474,10 @@ type regSlot struct {
 	kind placeKind
 	i    int
 	w    width
+
+	// fixed is the register a placeFixed slot names, which is not an
+	// index into either file: Swift's registers are beside the sequence.
+	fixed reg.R64
 
 	// bytes is how many bytes of the register the slot carries when that
 	// is fewer than the width says: a two-byte aggregate comes back in

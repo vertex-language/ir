@@ -10,6 +10,7 @@ package amd64
 import (
 	"fmt"
 
+	"github.com/vertex-language/amd64/feature"
 	"github.com/vertex-language/amd64/reg"
 
 	"github.com/vertex-language/ir"
@@ -36,7 +37,7 @@ const (
 // libcallSyms is every library symbol a module needs declared. Collected
 // up front because an undeclared reference is an error at Finalize, by
 // which point there is no instruction left to name in the message.
-func libcallSyms(m *ir.Module, prefix string) []string {
+func libcallSyms(m *ir.Module, prefix string, features feature.Set) []string {
 	seen := map[string]bool{}
 	var out []string
 	add := func(s string) {
@@ -49,6 +50,11 @@ func libcallSyms(m *ir.Module, prefix string) []string {
 		fn.WalkInsts(func(in *ir.Inst) bool {
 			if sym, ok := libcalls[in.Op().Verb]; ok {
 				add(sym)
+			}
+			if len(in.Results()) == 1 {
+				if sym, ok := fallbackLibcall(features, in.Op().Verb, in.Result(0).Type()); ok {
+					add(sym)
+				}
 			}
 			switch in.Op().Verb {
 			case ir.VAlloc, ir.VAlloca:

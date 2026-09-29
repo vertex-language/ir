@@ -211,9 +211,13 @@ func iselInst(mf *mir.Func, c *cursor, vr *vregs, fr *frame, in *ir.Inst) error 
 		ir.VBitcastF32, ir.VBitcastI32, ir.VBitcastF64, ir.VBitcastI64:
 		return iselFloatConvert(c, vr, in)
 
-	case ir.VFMA:
-		return iselFma(c, vr, in)
-	case ir.VCeil, ir.VFloor, ir.VTrunc, ir.VNearest:
+	case ir.VFMA, ir.VCeil, ir.VFloor, ir.VTrunc, ir.VNearest:
+		if sym, ok := fallbackLibcall(c.features, verb, in.Result(0).Type()); ok {
+			return iselFloatLibcall(c, vr, in, sym)
+		}
+		if verb == ir.VFMA {
+			return iselFma(c, vr, in)
+		}
 		return iselFloatRound(c, vr, in)
 	case ir.VMinimum, ir.VMaximum, ir.VMinNum, ir.VMaxNum:
 		return iselFloatMinMax(c, vr, in)
@@ -676,6 +680,10 @@ func iselBitCount(c *cursor, vr *vregs, in *ir.Inst) error {
 		c.Emit(mir.Instr{Op: bswapOp{w: w}, Defs: []mir.VReg{dst}, Uses: []mir.VReg{src}})
 		return nil
 	}
+	if !native(c.features, op.Verb) {
+		iselBitCountFallback(c, vr, in, src, dst, w)
+		return nil
+	}
 	c.Emit(mir.Instr{
 		Op:   bitCountOp{verb: op.Verb, w: w},
 		Defs: []mir.VReg{dst}, Uses: []mir.VReg{src},
@@ -845,7 +853,13 @@ func iselCallSeq(c *cursor, vr *vregs, what string, spec []abiArg, sig *ir.Sig, 
 	if err != nil {
 		return fmt.Errorf("%s: %w", what, err)
 	}
-	rets, err := classifyRet(c.fn.Module().Layout().ABI, typesOf(results))
+	// The error result, if the callee may fail, is in R12 rather than in
+	// the return sequence, so the others are placed without it.
+	errIdx := errorResult(sig)
+	if errIdx >= len(results) {
+		errIdx = -1
+	}
+	rets, err := classifyRet(abi, typesOf(withoutIndex(results, errIdx)))
 	if err != nil {
 		return fmt.Errorf("%s: %w", what, err)
 	}
@@ -927,7 +941,7 @@ func iselCallSeq(c *cursor, vr *vregs, what string, spec []abiArg, sig *ir.Sig, 
 				dst = site.xmmReg(floatArgReg(abi, slot.i), slot.w)
 				floats++
 			} else {
-				dst = site.intReg(intArgReg(abi, slot.i), slot.w)
+				dst = site.intReg(argIntReg(abi, slot), slot.w)
 			}
 			inRegs = append(inRegs, dst)
 
@@ -975,10 +989,16 @@ func iselCallSeq(c *cursor, vr *vregs, what string, spec []abiArg, sig *ir.Sig, 
 
 	// RAX, whether or not anything returns in it: it is clobbered either
 	// way, and naming it first is what makes it the head of the clobber
-	// list below.
+	// list below. A Swift indirect result may already have put an
+	// argument there, in which case it is that argument's vreg and is
+	// already among the ones the call uses and defines.
+	raxArg := site.namedInt(reg.RAX)
 	rax := site.intReg(reg.RAX, w64)
 
 	if sig != nil && sig.IsVariadic() && abi != abiMS {
+		if raxArg {
+			return fmt.Errorf("%s: a variadic call cannot pass a Swift indirect result, which is in RAX where AL counts the vector registers", what)
+		}
 		// AL carries the number of vector registers used, which is what
 		// a variadic SysV callee reads to decide how much of its save
 		// area to write; too small and va_arg reads a register nobody
@@ -990,6 +1010,20 @@ func iselCallSeq(c *cursor, vr *vregs, what string, spec []abiArg, sig *ir.Sig, 
 		// bytes are unspecified anyway.
 		c.Emit(mir.Instr{Op: constOp{imm: int64(floats), w: w32}, Defs: []mir.VReg{rax}})
 		uses = append(uses, rax)
+	}
+
+	// A tail call does not come back, so nothing is live across it and
+	// it destroys nothing anyone will read: it uses its arguments, and
+	// that is all. The error register is cleared for the callee all the
+	// same, since the callee answers this function's caller through it.
+	if isTailOp(op) {
+		if errIdx >= 0 {
+			zero := site.intReg(swiftErrorReg, w64)
+			c.Emit(mir.Instr{Op: constOp{w: w64, imm: 0}, Defs: []mir.VReg{zero}})
+			uses = append(uses, zero)
+		}
+		c.Emit(mir.Instr{Op: op, Uses: uses})
+		return nil
 	}
 
 	// Every caller-saved register is a destination whether or not the
@@ -1022,8 +1056,24 @@ func iselCallSeq(c *cursor, vr *vregs, what string, spec []abiArg, sig *ir.Sig, 
 			}
 		}
 	}
-	defs := []mir.VReg{rax}
+	var defs []mir.VReg
+	if !raxArg {
+		defs = append(defs, rax)
+	}
 	defs = append(defs, inRegs...)
+
+	// The error register, cleared before the call: the callee writes it
+	// only on the path that fails, so a caller that did not clear it would
+	// read whatever was there and decide the call had thrown. swiftc
+	// writes `xor r12d, r12d` here for the same reason. It is callee-saved,
+	// so it is not among the clobbers below; it is a def because the call
+	// may write it.
+	if errIdx >= 0 {
+		zero := site.intReg(swiftErrorReg, w64)
+		c.Emit(mir.Instr{Op: constOp{w: w64, imm: 0}, Defs: []mir.VReg{zero}})
+		uses = append(uses, zero)
+		defs = append(defs, zero)
+	}
 	clob := &mir.Clobbers{}
 	for _, r := range regsFor(abi).callerSaved {
 		switch {
@@ -1068,16 +1118,27 @@ func iselCallSeq(c *cursor, vr *vregs, what string, spec []abiArg, sig *ir.Sig, 
 				} else {
 					src = site.intReg(intRetReg(abi, slot.i), slot.w)
 				}
-				// Address first, value second, which is this op's order.
-				if slot.bytes != 0 && slot.bytes < 8 && k == 0 {
-					// The low bytes of the register, into storage no
-					// wider than they are.
+				// The low bytes of the register, into storage no wider
+				// than they are: a store of the whole register would
+				// write past the end of the caller's object, over
+				// whatever the frame keeps beside it.
+				if slot.bytes != 0 && slot.bytes < 8 {
+					if slot.kind == placeFloat {
+						// A float eightbyte that is not whole is one f32.
+						c.Emit(mir.Instr{
+							Op:   storeAtOp{off: int32(k * 8), w: wf32},
+							Uses: []mir.VReg{dst, site.xmmReg(floatRetReg(abi, slot.i), wf32)},
+						})
+						continue
+					}
 					c.Emit(mir.Instr{
-						Op:   subStoreOp{to: access(slot.bytes)},
+						Op:   storeTailOp{off: int32(k * 8), bytes: int(slot.bytes)},
+						Defs: []mir.VReg{vr.temp(w64)},
 						Uses: []mir.VReg{src, dst},
 					})
 					continue
 				}
+				// Address first, value second, which is this op's order.
 				c.Emit(mir.Instr{
 					Op:   storeAtOp{off: int32(k * 8), w: slot.w},
 					Uses: []mir.VReg{dst, src},
@@ -1090,8 +1151,15 @@ func iselCallSeq(c *cursor, vr *vregs, what string, spec []abiArg, sig *ir.Sig, 
 	// source comes from the site, so a result in a register an argument
 	// arrived in is the vreg that argument used — the call redefined it,
 	// which is exactly what happened.
+	if errIdx >= 0 {
+		result, err := vr.define(results[errIdx])
+		if err != nil {
+			return fmt.Errorf("%s: %w", what, err)
+		}
+		emitCopy(c, result, site.intReg(swiftErrorReg, w64), w64)
+	}
 	for i, pl := range rets {
-		result, err := vr.define(results[i])
+		result, err := vr.define(withoutIndex(results, errIdx)[i])
 		if err != nil {
 			return fmt.Errorf("%s: %w", what, err)
 		}
