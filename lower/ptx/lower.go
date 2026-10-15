@@ -76,6 +76,13 @@ type Options struct {
 	// is given. PTX has a calling convention, so this is only speed: a
 	// call through .param space is a round trip through local memory.
 	Inline bool
+
+	// Prune leaves out every function and import no kernel calls,
+	// directly or through another function: what a kernel was inlined
+	// from, say, which the driver would otherwise have to link, and
+	// whose calls -- to an intrinsic its caller resolves -- it cannot.
+	// A function reached other than by a call is not seen.
+	Prune bool
 }
 
 func (o Options) isa() ptx.ISAVersion {
@@ -116,7 +123,15 @@ func Lower(m *ir.Module, opts Options) (*ptx.Module, error) {
 	// in the module regardless of order. PTX itself wants a symbol
 	// declared before use, and the module's declaration order is kept
 	// for everything that has bytes.
+	keep := func(ir.Callee) bool { return true }
+	if opts.Prune {
+		reached := reachedFromKernels(m)
+		keep = func(c ir.Callee) bool { return reached[c] }
+	}
 	for _, f := range m.FuncImports() {
+		if !keep(f) {
+			continue
+		}
 		if err := l.declareImport(f); err != nil {
 			return nil, err
 		}
@@ -134,11 +149,17 @@ func Lower(m *ir.Module, opts Options) (*ptx.Module, error) {
 	// callee's prototype first: one is declared ahead of every body for
 	// each function called from a body that precedes its own.
 	for _, f := range forwardCalled(m) {
+		if !keep(f) {
+			continue
+		}
 		if err := l.declareProto(f); err != nil {
 			return nil, err
 		}
 	}
 	for _, f := range m.Funcs() {
+		if !keep(f) {
+			continue
+		}
 		if err := l.declareFunc(f); err != nil {
 			return nil, err
 		}
@@ -146,6 +167,9 @@ func Lower(m *ir.Module, opts Options) (*ptx.Module, error) {
 	for _, it := range m.Items() {
 		switch x := it.(type) {
 		case *ir.Func:
+			if !keep(x) {
+				continue
+			}
 			if err := l.lowerFunc(x); err != nil {
 				return nil, err
 			}
@@ -154,6 +178,38 @@ func Lower(m *ir.Module, opts Options) (*ptx.Module, error) {
 		}
 	}
 	return l.pm, nil
+}
+
+// reachedFromKernels is the kernels of m and every function and import
+// they call, directly or not.
+func reachedFromKernels(m *ir.Module) map[ir.Callee]bool {
+	reached := map[ir.Callee]bool{}
+	var work []*ir.Func
+	for _, f := range m.Funcs() {
+		if f.Signature().CallConv() == ir.Kernel {
+			reached[f] = true
+			work = append(work, f)
+		}
+	}
+	for len(work) > 0 {
+		f := work[len(work)-1]
+		work = work[:len(work)-1]
+		f.WalkInsts(func(in *ir.Inst) bool {
+			if in.Op().Verb != ir.VCall {
+				return true
+			}
+			c := in.Callee()
+			if c == nil || reached[c] {
+				return true
+			}
+			reached[c] = true
+			if g, ok := c.(*ir.Func); ok {
+				work = append(work, g)
+			}
+			return true
+		})
+	}
+	return reached
 }
 
 // forwardCalled is the functions called from a body that comes before
