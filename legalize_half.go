@@ -46,7 +46,17 @@ package ir
 // LegalizeHalf rewrites every f16 and bf16 value in the module into an
 // i32 carrier, and reports whether it changed anything. It is safe to run
 // on a module with no half floats, and on one already legalized.
-func (m *Module) LegalizeHalf() bool {
+func (m *Module) LegalizeHalf() bool { return m.legalizeHalfWith(false) }
+
+// LegalizeHalfNativeWiden is LegalizeHalf for a target that converts an
+// f16 to f32 in one instruction (Apple's GPUs): every widening of an f16
+// -- its own conversion, and the operands of the arithmetic done in f32
+// -- is left one f32.fcvt_f16 whose operand is the i32 carrier, for the
+// backend to lower as that instruction. Everything else is as
+// LegalizeHalf makes it.
+func (m *Module) LegalizeHalfNativeWiden() bool { return m.legalizeHalfWith(true) }
+
+func (m *Module) legalizeHalfWith(nativeWiden bool) bool {
 	if m == nil || m.err != nil {
 		return false
 	}
@@ -54,7 +64,7 @@ func (m *Module) LegalizeHalf() bool {
 	for _, it := range m.items {
 		switch x := it.(type) {
 		case *Func:
-			if x.legalizeHalf() {
+			if x.legalizeHalf(nativeWiden) {
 				changed = true
 			}
 			if retypeSig(x.sig) {
@@ -94,11 +104,11 @@ func retypeSig(s *Sig) bool {
 	return changed
 }
 
-func (f *Func) legalizeHalf() bool {
+func (f *Func) legalizeHalf(nativeWiden bool) bool {
 	if f == nil || f.m == nil || f.m.err != nil || len(f.blocks) == 0 || !f.usesHalf() {
 		return false
 	}
-	p := &halfPass{f: f, repl: map[*Def]*Def{}}
+	p := &halfPass{f: f, repl: map[*Def]*Def{}, nativeWiden: nativeWiden}
 	for _, b := range f.blocks {
 		p.blk = b
 		p.out = make([]*Inst, 0, len(b.insts)+8)
@@ -195,6 +205,8 @@ type halfPass struct {
 	blk  *Block
 	out  []*Inst
 	repl map[*Def]*Def // a result this pass replaced, and what its uses read now
+	// nativeWiden: an f16 is widened by one f32.fcvt_f16 of its carrier.
+	nativeWiden bool
 }
 
 // --- emission ---------------------------------------------------------
@@ -254,6 +266,9 @@ func (p *halfPass) floatOf(b *Def) *Def {
 func (p *halfPass) widen(t RegType, h *Def) *Def {
 	if t == TypeBF16 {
 		return p.floatOf(p.shl(h, p.i32(16)))
+	}
+	if p.nativeWiden {
+		return p.emitAs(TypeF32, TypeF32, VFCvtF16, h)
 	}
 	o := p.shl(p.and(h, p.i32(0x7fff)), p.i32(13)) // exponent and fraction, in place
 	exp := p.and(o, p.i32(0x0f800000))             // the half's exponent field, shifted

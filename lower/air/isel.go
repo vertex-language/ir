@@ -139,6 +139,14 @@ func (x *fn) inst(in *ir.Inst) error {
 		x.floatToInt(in, false)
 	case ir.VSCvtF64, ir.VUCvtF64, ir.VSCvtSatF64, ir.VUCvtSatF64, ir.VFCvtF32, ir.VFCvtF64:
 		return fmt.Errorf("Apple GPUs have no f64")
+	case ir.VFCvtF16:
+		// An f16 the legalizer left in an i32's low bits to widen here
+		// (ir.Module.LegalizeHalfNativeWiden): the GPU's own conversion.
+		if t != ir.TypeF32 || in.Arg(0).Type() != ir.TypeI32 {
+			return fmt.Errorf("%s of a %s: only an f16 carried in an i32 widens to f32 here", op, in.Arg(0).Type())
+		}
+		h := b.Bitcast(b.Trunc(x.arg(in, 0), am.I16), am.Half)
+		x.def(in, b.FPExt(h, am.Float))
 	case ir.VBitcastF32, ir.VBitcastI32, ir.VBitcastI64:
 		rt, err := x.regType(t, 0)
 		if err != nil {

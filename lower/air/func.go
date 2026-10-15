@@ -65,6 +65,25 @@ func (l *lowerer) kernel(f *ir.Func) error {
 	// in a struct is promoted too.
 	f.SplitSlots()
 	f.PromoteSlots()
+	// Apple's compiler takes AIR much as it is given: a branch on two
+	// constants (every shift by a literal has four), a division by a
+	// power of two, the chain of blocks an inliner leaves, and the value
+	// computed twice each cost a kernel time every time it runs
+	// (ir.FoldConstants, ir.ReducePowersOfTwo, ir.MergeBlocks).
+	f.FoldConstants()
+	f.ReducePowersOfTwo()
+	f.MergeBlocks()
+	f.ThreadJoins()
+	f.NumberValues()
+	f.MergeBlocks()
+	// Nor does it unroll a loop: a kernel's short constant loops are
+	// written out here (ir.UnrollConstantLoops), and what that leaves
+	// straightened and numbered again.
+	if f.UnrollConstantLoops() > 0 {
+		f.MergeBlocks()
+		f.NumberValues()
+		f.MergeBlocks()
+	}
 	bind, err := bindingsOf(f)
 	if err != nil {
 		return err
