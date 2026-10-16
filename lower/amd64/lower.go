@@ -341,13 +341,17 @@ func Lower(m *ir.Module, opts Options) (*amd64obj.Object, error) {
 		return nil, err
 	}
 
-	// §V5 and §A8 are calls here until this package selects their
-	// instructions (§0), and the §V verbs SSE2 has no instruction for are
-	// rewritten into the ones it has.
-	m.LegalizeCryptoAll()
-	m.ExpandVectorVerbs(func(ir.Verb) bool { return true })
+	// What a function may not execute becomes a call (§0) -- and so does
+	// what it requires that x86-64 has no instruction for. The assembler
+	// is told every feature some function may use: the rows themselves
+	// are gated, and a requires function's are its own.
+	m.LegalizeCryptoOn(capabilitiesOf(opts.features()), lowered)
+	asmFeatures := opts.features()
+	for _, f := range m.Funcs() {
+		asmFeatures = asmFeatures.Add(funcFeatures(opts.features(), f).Features()...)
+	}
 
-	am := amd64asm.NewModule(amd64asm.WithFeatures(opts.features()))
+	am := amd64asm.NewModule(amd64asm.WithFeatures(asmFeatures))
 
 	// A weak import is a reference the link may leave unresolved.
 	for _, f := range m.FuncImports() {
@@ -401,6 +405,24 @@ func Lower(m *ir.Module, opts Options) (*amd64obj.Object, error) {
 			if err := inline.Func(f, inline.Options{Should: smallCallee}); err != nil {
 				return nil, err
 			}
+		}
+	}
+
+	// The §V verbs a function has no instruction for are rewritten into
+	// the ones it has -- after inlining, so that a small helper's byte
+	// swap copied into a function that requires aes is that function's
+	// PSHUFB and not the helper's baseline sequence or call.
+	// The swizzle's call is an import the externs above did not see.
+	imported := map[string]bool{}
+	for _, f := range m.FuncImports() {
+		imported[f.Name()] = true
+	}
+	for _, f := range m.Funcs() {
+		f.ExpandVectorVerbs(expandFor(funcFeatures(opts.features(), f)))
+	}
+	for _, f := range m.FuncImports() {
+		if !imported[f.Name()] {
+			am.Extern(f.Name())
 		}
 	}
 
@@ -490,7 +512,8 @@ func lowerFunc(am *amd64asm.Module, text *amd64asm.Section, fn *ir.Func, opts Op
 		fn.Tidy()
 	}
 
-	fr, err := planFrame(fn, opts.features())
+	feat := funcFeatures(opts.features(), fn)
+	fr, err := planFrame(fn, feat)
 	if err != nil {
 		return err
 	}
@@ -536,7 +559,7 @@ func lowerFunc(am *amd64asm.Module, text *amd64asm.Section, fn *ir.Func, opts Op
 			return nil
 		}
 		done[i] = true
-		if err := iselBlock(fn, mf, newCursor(fn, mf, mbs[i], opts.LibcallPrefix, opts.features()), vr, fr, blk, uses); err != nil {
+		if err := iselBlock(fn, mf, newCursor(fn, mf, mbs[i], opts.LibcallPrefix, feat), vr, fr, blk, uses); err != nil {
 			return fmt.Errorf("lower: %s: %w", fn.Name(), err)
 		}
 		return nil

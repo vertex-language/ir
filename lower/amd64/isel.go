@@ -151,6 +151,9 @@ func iselInst(mf *mir.Func, c *cursor, vr *vregs, fr *frame, in *ir.Inst) error 
 	// §V next, for the same reason and one more: its verbs are shared
 	// with the scalar namespaces at and, or, xor and not, so the
 	// namespace has to decide before the verb does.
+	if cryptoVerb(in) {
+		return iselCrypto(c, vr, in)
+	}
 	if in.Op().Type == ir.TypeV128 && vecVerb(in.Op().Verb) {
 		return iselVec(c, vr, in)
 	}

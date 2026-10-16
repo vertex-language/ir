@@ -23,6 +23,7 @@ import (
 	"github.com/vertex-language/amd64/reg"
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/ir/lower/mir"
+	"github.com/vertex-language/ir/lower/regalloc"
 )
 
 // The MIR ops. Each names the VIR verb it came from rather than the
@@ -597,6 +598,19 @@ func emitVec(text *amd64asm.Section, in mir.Instr, xmm func(mir.VReg) reg.Xmm,
 
 	case vecSplatOp:
 		emitSplat(text, op.verb, xmm(in.Defs[0]), in, r32, r64)
+
+	case seqOp:
+		// xmm is the assignment read as an XMM register, which is the
+		// assignment's own number: an emitter given the raw numbers
+		// reads each as the register file its operand is in.
+		r := make([]regalloc.PhysReg, 0, len(in.Defs)+len(in.Uses))
+		for _, d := range in.Defs {
+			r = append(r, regalloc.PhysReg(xmm(d)))
+		}
+		for _, u := range in.Uses {
+			r = append(r, regalloc.PhysReg(xmm(u)))
+		}
+		op.emit(text, r)
 
 	default:
 		return false

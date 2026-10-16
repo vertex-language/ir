@@ -26,6 +26,10 @@ type cursor struct {
 	// features is the processor, for the verbs whose lowering depends on
 	// it. See fallback.go.
 	features feature.Set
+
+	// sha256 is the SHA-256 round verbs whose answer an earlier one of
+	// the pair already computed; see crypto.go.
+	sha256 map[*ir.Inst]mir.VReg
 }
 
 func newCursor(fn *ir.Func, mf *mir.Func, blk *mir.Block, prefix string, features feature.Set) *cursor {
@@ -194,7 +198,13 @@ func fusesEveryUse(uses useIndex, cmp *ir.Inst) bool {
 			return false
 		}
 		switch u.Inst.Op().Verb {
-		case ir.VBrIf, ir.VSelect:
+		case ir.VBrIf:
+		case ir.VSelect:
+			// A v128 select builds a mask from the condition as a
+			// value; there are no flags for it to read.
+			if u.Inst.Op().Type == ir.TypeV128 {
+				return false
+			}
 		default:
 			return false
 		}
