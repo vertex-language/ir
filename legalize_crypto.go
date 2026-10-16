@@ -40,7 +40,9 @@ func (m *Module) LegalizeCrypto(baseline Capabilities) bool {
 
 // LegalizeCryptoAll is LegalizeCrypto for a backend that lowers none of
 // these instructions yet: every one is a call, a function's requires
-// notwithstanding.
+// notwithstanding, and every i1.cpu_has is 0. A program asks cpu_has to
+// choose a path built on the instructions, and on this backend that path
+// would run each of them as a call -- slower than the path it guards.
 func (m *Module) LegalizeCryptoAll() bool { return m.legalizeCrypto(0, false) }
 
 func (m *Module) legalizeCrypto(baseline Capabilities, honourRequires bool) bool {
@@ -64,7 +66,7 @@ func (f *Func) legalizeCrypto(baseline Capabilities, honourRequires bool) bool {
 	if honourRequires {
 		may |= f.requires
 	}
-	p := &cryptoPass{f: f, baseline: baseline, repl: map[*Def]*Def{}}
+	p := &cryptoPass{f: f, baseline: baseline, none: !honourRequires, repl: map[*Def]*Def{}}
 	for _, b := range f.blocks {
 		out := make([]*Inst, 0, len(b.insts))
 		for _, in := range b.insts {
@@ -113,6 +115,7 @@ func (f *Func) legalizeCrypto(baseline Capabilities, honourRequires bool) bool {
 type cryptoPass struct {
 	f        *Func
 	baseline Capabilities
+	none     bool // the backend lowers none of the verbs: cpu_has is 0
 	repl     map[*Def]*Def
 	changed  bool
 	scratch  *Def // the frame slot v128 operands travel in, once made
@@ -151,6 +154,9 @@ func (p *cryptoPass) replace(b *Block, in *Inst) *Def {
 	v := in.op.Verb
 	if v == VCpuHas {
 		c, _ := in.Capability()
+		if p.none {
+			return b.I1.Const(false).d
+		}
 		if p.baseline.Has(c) {
 			return b.I1.Const(true).d
 		}

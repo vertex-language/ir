@@ -118,3 +118,20 @@ func TestExpandVectorVerbs(t *testing.T) {
 		}
 	}
 }
+
+// A backend that lowers none of the verbs answers cpu_has with 0, requires
+// or not, so a program keeps to the path that does not need them rather
+// than one whose every instruction is a call.
+func TestLegalizeCryptoAllFoldsCpuHas(t *testing.T) {
+	m := cryptoModule(true)
+	if !m.LegalizeCryptoAll() {
+		t.Fatal("nothing legalized")
+	}
+	got := printed(t, m)
+	if strings.Contains(got, ir.CPUHasSymbol) {
+		t.Errorf("cpu_has still asks the runtime:\n%s", got)
+	}
+	if !strings.Contains(got, "call @vertex_aes_enc") {
+		t.Errorf("aes_enc kept as an instruction despite requires:\n%s", got)
+	}
+}
