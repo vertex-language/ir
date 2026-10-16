@@ -35,38 +35,53 @@ const CPUHasSymbol = "vertex_cpu_has"
 // i1.cpu_has into its answer. It reports whether it changed anything, and
 // is safe to run on a module with none of these verbs.
 func (m *Module) LegalizeCrypto(baseline Capabilities) bool {
-	return m.legalizeCrypto(baseline, true)
+	return m.legalizeCrypto(baseline, allCapabilities)
 }
 
-// LegalizeCryptoAll is LegalizeCrypto for a backend that lowers none of
-// these instructions yet: every one is a call, a function's requires
-// notwithstanding, and every i1.cpu_has is 0. A program asks cpu_has to
-// choose a path built on the instructions, and on this backend that path
-// would run each of them as a call -- slower than the path it guards.
-func (m *Module) LegalizeCryptoAll() bool { return m.legalizeCrypto(0, false) }
+// LegalizeCryptoOn is LegalizeCrypto for a backend that selects
+// instructions for the capabilities in lowers and no others: a function's
+// requires outside lowers are calls, as if it did not require them, and
+// i1.cpu_has of one is 0. A program asks cpu_has to choose a path built on
+// the instructions, and on this backend that path would run each of them
+// as a call -- slower than the path it guards. x86-64 is such a target: it
+// has no CRC-32, SHA-512 or SM3 instruction the IR's verbs are.
+func (m *Module) LegalizeCryptoOn(baseline, lowers Capabilities) bool {
+	return m.legalizeCrypto(baseline&lowers, lowers)
+}
 
-func (m *Module) legalizeCrypto(baseline Capabilities, honourRequires bool) bool {
+// LegalizeCryptoAll is LegalizeCryptoOn for a backend that lowers none of
+// these instructions yet: every one is a call, a function's requires
+// notwithstanding, and every i1.cpu_has is 0.
+func (m *Module) LegalizeCryptoAll() bool { return m.legalizeCrypto(0, 0) }
+
+// allCapabilities is every capability §P names.
+var allCapabilities = func() Capabilities {
+	var s Capabilities
+	for c := CapAES; c < capCount; c++ {
+		s = s.With(c)
+	}
+	return s
+}()
+
+func (m *Module) legalizeCrypto(baseline, lowers Capabilities) bool {
 	if m == nil || m.err != nil {
 		return false
 	}
 	changed := false
 	for _, it := range m.items {
-		if f, ok := it.(*Func); ok && f.legalizeCrypto(baseline, honourRequires) {
+		if f, ok := it.(*Func); ok && f.legalizeCrypto(baseline, lowers) {
 			changed = true
 		}
 	}
 	return changed
 }
 
-func (f *Func) legalizeCrypto(baseline Capabilities, honourRequires bool) bool {
+func (f *Func) legalizeCrypto(baseline, lowers Capabilities) bool {
 	if len(f.blocks) == 0 {
 		return false
 	}
-	may := baseline
-	if honourRequires {
-		may |= f.requires
-	}
-	p := &cryptoPass{f: f, baseline: baseline, none: !honourRequires, repl: map[*Def]*Def{}}
+	may := baseline | f.requires&lowers
+	p := &cryptoPass{f: f, baseline: baseline, lowers: lowers, repl: map[*Def]*Def{}}
 	for _, b := range f.blocks {
 		out := make([]*Inst, 0, len(b.insts))
 		for _, in := range b.insts {
@@ -115,7 +130,7 @@ func (f *Func) legalizeCrypto(baseline Capabilities, honourRequires bool) bool {
 type cryptoPass struct {
 	f        *Func
 	baseline Capabilities
-	none     bool // the backend lowers none of the verbs: cpu_has is 0
+	lowers   Capabilities // what the backend selects; cpu_has of the rest is 0
 	repl     map[*Def]*Def
 	changed  bool
 	scratch  *Def // the frame slot v128 operands travel in, once made
@@ -154,7 +169,7 @@ func (p *cryptoPass) replace(b *Block, in *Inst) *Def {
 	v := in.op.Verb
 	if v == VCpuHas {
 		c, _ := in.Capability()
-		if p.none {
+		if !p.lowers.Has(c) {
 			return b.I1.Const(false).d
 		}
 		if p.baseline.Has(c) {
@@ -230,52 +245,62 @@ func valueOf(d *Def) Value {
 // the byte swaps into shifts and word shuffles, and i8x16_swizzle -- which
 // no shift reaches -- into a call of vertex_i8x16_swizzle, as LegalizeCrypto
 // makes its calls. expand says which verbs to rewrite; x86-64 without
-// SSSE3 and AVX-512 asks for all of them.
+// SSSE3 asks for the byte swaps and the swizzle.
 func (m *Module) ExpandVectorVerbs(expand func(Verb) bool) bool {
 	if m == nil || m.err != nil {
 		return false
 	}
 	changed := false
 	for _, it := range m.items {
-		f, ok := it.(*Func)
-		if !ok || len(f.blocks) == 0 {
-			continue
+		if f, ok := it.(*Func); ok && f.ExpandVectorVerbs(expand) {
+			changed = true
 		}
-		p := &cryptoPass{f: f, repl: map[*Def]*Def{}}
-		for _, b := range f.blocks {
-			out := make([]*Inst, 0, len(b.insts))
-			for _, in := range b.insts {
-				for i, a := range in.args {
-					if r, ok := p.repl[a]; ok {
-						in.args[i] = r
-					}
+	}
+	return changed
+}
+
+// ExpandVectorVerbs is the module's pass on one function, for a target
+// whose answer differs by function: one that requires aes on x86-64 runs
+// on a processor with SSSE3, whatever the module's baseline.
+func (f *Func) ExpandVectorVerbs(expand func(Verb) bool) bool {
+	if f == nil || f.m == nil || f.m.err != nil || len(f.blocks) == 0 {
+		return false
+	}
+	changed := false
+	p := &cryptoPass{f: f, repl: map[*Def]*Def{}}
+	for _, b := range f.blocks {
+		out := make([]*Inst, 0, len(b.insts))
+		for _, in := range b.insts {
+			for i, a := range in.args {
+				if r, ok := p.repl[a]; ok {
+					in.args[i] = r
 				}
-				if in.op.Type != TypeV128 || !expandable[in.op.Verb] || !expand(in.op.Verb) {
-					out = append(out, in)
-					continue
-				}
-				term := b.term
-				b.insts, b.term = out, nil
-				d := p.expandVector(b, in)
-				out, b.term = b.insts, term
-				if d == nil {
-					return changed
-				}
-				p.repl[in.results[0]] = d
-				changed = true
 			}
-			b.insts = out
+			if in.op.Type != TypeV128 || !expandable[in.op.Verb] || !expand(in.op.Verb) {
+				out = append(out, in)
+				continue
+			}
+			term := b.term
+			b.insts, b.term = out, nil
+			d := p.expandVector(b, in)
+			out, b.term = b.insts, term
+			if d == nil {
+				return changed
+			}
+			p.repl[in.results[0]] = d
+			changed = true
 		}
-		if len(p.repl) > 0 {
-			f.WalkUses(func(u Use) bool {
-				if d := u.Def(); d != nil {
-					if r, ok := p.repl[d]; ok {
-						u.Set(r)
-					}
+		b.insts = out
+	}
+	if len(p.repl) > 0 {
+		f.WalkUses(func(u Use) bool {
+			if d := u.Def(); d != nil {
+				if r, ok := p.repl[d]; ok {
+					u.Set(r)
 				}
-				return true
-			})
-		}
+			}
+			return true
+		})
 	}
 	return changed
 }

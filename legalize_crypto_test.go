@@ -135,3 +135,25 @@ func TestLegalizeCryptoAllFoldsCpuHas(t *testing.T) {
 		t.Errorf("aes_enc kept as an instruction despite requires:\n%s", got)
 	}
 }
+
+// A backend that lowers some capabilities keeps a requires function's
+// verbs of those and calls the rest, and cpu_has of one it does not lower
+// is 0 rather than the runtime's answer.
+func TestLegalizeCryptoOn(t *testing.T) {
+	m := cryptoModule(true)
+	m.Funcs()[0].Requires(ir.CapSHA1)
+	lowers := ir.Capabilities(0).With(ir.CapAES, ir.CapCRC32C)
+	if !m.LegalizeCryptoOn(0, lowers) {
+		t.Fatal("nothing legalized")
+	}
+	got := printed(t, m)
+	for _, want := range []string{"v128.aes_enc ", "v128.aes_keygen_assist", "call @vertex_sha1_rounds_ch",
+		"call @vertex_crc32c_u64", "call @vertex_cpu_has", "i1.const 0"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no %q in:\n%s", want, got)
+		}
+	}
+	if strings.Count(got, "call @vertex_cpu_has") != 1 {
+		t.Errorf("cpu_has(sha512) asks the runtime; this backend has no SHA-512:\n%s", got)
+	}
+}
