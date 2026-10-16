@@ -144,6 +144,11 @@ func (f *Func) splitSlot(alloc *Inst, uses []Use) bool {
 		if cl == nil {
 			return false
 		}
+		// Clone appends to the block; the slot goes where the old one
+		// was, ahead of every use. (PromoteSlots usually removes it, as it
+		// does on a GPU; on a CPU one whose address is taken stays.)
+		f.entry.Remove(cl)
+		f.entry.InsertBefore(alloc, cl)
 		cl.im.size = widths[off]
 		align := widths[off]
 		if align > 16 {

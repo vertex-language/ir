@@ -41,6 +41,13 @@ type Options struct {
 	// through one call site; zero is 64. Recursion is refused before it
 	// gets there; the bound is what makes that refusal a guarantee.
 	MaxDepth int
+
+	// Should, when set, makes inlining a choice: a call is inlined only
+	// where it answers true, and a call this package cannot inline --
+	// recursion, a chain past MaxDepth, a callee with a pad block or one
+	// that returns twice -- is left as a call rather than an error. A CPU
+	// backend, which has calls, sets it to take the small callees only.
+	Should func(caller, callee *ir.Func) bool
 }
 
 // Module inlines every call it can in every function of m.
@@ -66,6 +73,7 @@ func Func(f *ir.Func, opts Options) error {
 	if depth <= 0 {
 		depth = 64
 	}
+	choosing := opts.Should != nil
 	st := &state{f: f, labels: map[string]bool{}, names: map[string]bool{}}
 	for _, b := range f.Blocks() {
 		st.labels[b.Label()] = true
@@ -97,6 +105,12 @@ func Func(f *ir.Func, opts Options) error {
 		if !ok {
 			continue
 		}
+		if choosing {
+			if len(callee.Blocks()) == 0 || callee == f || onChain(s.chain, callee) || len(s.chain) >= depth ||
+				!plain(callee) || !closed(s.in, callee) || !opts.Should(f, callee) {
+				continue
+			}
+		}
 		if callee == f {
 			return fmt.Errorf("inline: @%s calls itself", f.Name())
 		}
@@ -118,6 +132,66 @@ func Func(f *ir.Func, opts Options) error {
 		}
 	}
 	return f.Module().Err()
+}
+
+// closed reports whether call's callee can be copied whole: every
+// parameter has an argument, and every operand in the body is a
+// parameter, a block's parameter or a result defined before it in the
+// order the copy is made. Anything else -- a value the copy would leave
+// pointing into the callee -- makes the call one to keep.
+func closed(call *ir.Inst, callee *ir.Func) bool {
+	if call.NumArgs() != len(callee.Params()) {
+		return false
+	}
+	known := map[*ir.Def]bool{}
+	for _, p := range callee.Params() {
+		known[p] = true
+	}
+	order := callee.RPO()
+	for _, b := range order {
+		for _, p := range b.Params() {
+			known[p] = true
+		}
+	}
+	for _, b := range order {
+		insts := append(append([]*ir.Inst(nil), b.Insts()...), b.Term())
+		for _, in := range insts {
+			for _, a := range in.Args() {
+				if a != nil && !known[a] {
+					return false
+				}
+			}
+			for _, r := range in.Results() {
+				known[r] = true
+			}
+		}
+	}
+	return true
+}
+
+// onChain reports whether callee is already on a call site's chain: a
+// recursion.
+func onChain(chain []*ir.Func, callee *ir.Func) bool {
+	for _, c := range chain {
+		if c == callee {
+			return true
+		}
+	}
+	return false
+}
+
+// plain reports whether callee has none of what inline refuses: a pad
+// block, or a second return.
+func plain(callee *ir.Func) bool {
+	if callee.IsReturnsTwice() {
+		return false
+	}
+	for _, b := range callee.Blocks() {
+		if b.IsPad() {
+			return false
+		}
+	}
+	return true
 }
 
 // inlinable is the callee, if the call is one this package inlines.

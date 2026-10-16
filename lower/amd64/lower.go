@@ -291,14 +291,21 @@ import (
 	amd64obj "github.com/vertex-language/amd64/obj"
 
 	"github.com/vertex-language/ir"
+	"github.com/vertex-language/ir/lower/inline"
 	"github.com/vertex-language/ir/lower/mir"
 	"github.com/vertex-language/ir/lower/regalloc"
 )
 
-// OptLevel is how hard Lower tries. Only O0 exists today.
+// OptLevel is how hard Lower tries. O0 lowers each function as it is
+// given; O1 first runs ir.Func.Optimize on it, which a frontend that
+// leaves the cleanup to the backend (vsc) wants and a test of one
+// lowering does not.
 type OptLevel uint8
 
-const O0 OptLevel = iota
+const (
+	O0 OptLevel = iota
+	O1
+)
 
 // Options are the things Lower has no opinion about.
 type Options struct {
@@ -370,6 +377,27 @@ func Lower(m *ir.Module, opts Options) (*amd64obj.Object, error) {
 		return nil, err
 	}
 
+	if opts.OptLevel >= O1 {
+		// The small callees -- a rotate, a getter, a helper of a few
+		// operations -- are copied into their callers before anything is
+		// lowered, so that ir.Func.Optimize sees through them and no call
+		// is paid for an operation or two.
+		// Every body is cleaned up first, so that a callee is measured as
+		// it will be lowered: a frontend's locals are slots until
+		// PromoteSlots, and a getter of one load would otherwise count
+		// as a function with a stack frame.
+		for _, f := range m.Funcs() {
+			if _, asm := f.AsmBodyText(); !asm && len(f.Blocks()) > 0 {
+				f.Optimize()
+			}
+		}
+		for _, f := range m.Funcs() {
+			if err := inline.Func(f, inline.Options{Should: smallCallee}); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	// Items rather than Funcs, because a module-level asm block has a
 	// position among them: it is emitted where it was declared, and that
 	// is what decides where its bytes fall.
@@ -406,6 +434,29 @@ func Lower(m *ir.Module, opts Options) (*amd64obj.Object, error) {
 	return am.Finalize()
 }
 
+// smallCallee is O1's inlining policy: a callee of at most smallInsts
+// instructions that allocates no stack slot, which inlined into a loop
+// would be one more slot for every iteration's copy of the body.
+func smallCallee(_, callee *ir.Func) bool {
+	n := 0
+	for _, b := range callee.Blocks() {
+		for _, in := range b.Insts() {
+			switch in.Op().Verb {
+			case ir.VAlloc, ir.VStackSave, ir.VInvoke, ir.VInvokeInd:
+				return false
+			}
+			n++
+			if n > smallInsts {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// smallInsts is how many instructions a callee O1 inlines may have.
+const smallInsts = 40
+
 // checkLayout refuses a module whose layout block is not one this
 // package can lower for (64-bit, little-endian, SysV ABI).
 func checkLayout(m *ir.Module) error {
@@ -426,6 +477,11 @@ func checkLayout(m *ir.Module) error {
 func lowerFunc(am *amd64asm.Module, text *amd64asm.Section, fn *ir.Func, opts Options) error {
 	if body, ok := fn.AsmBodyText(); ok {
 		return emitAsmBody(text, fn, body)
+	}
+	if opts.OptLevel >= O1 {
+		// Lower ran ir.Func.Optimize on every function before inlining;
+		// what inlining brought in is folded, merged and numbered here.
+		fn.Tidy()
 	}
 
 	fr, err := planFrame(fn, opts.features())
