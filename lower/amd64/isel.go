@@ -340,13 +340,21 @@ func iselFloatConst(c *cursor, vr *vregs, dst mir.VReg, w width, f float64) erro
 // iselBinary lowers one of binOps: two registers in, one out.
 func iselBinary(mf *mir.Func, c *cursor, vr *vregs, in *ir.Inst) error {
 	op := in.Op()
-	a, ok := vr.lookup(in.Arg(0))
-	if !ok {
-		return fmt.Errorf("%s: operand defined outside the function", op)
+	// An operand that is the instruction's immediate (see immSide) has
+	// no register: the constant was not materialized.
+	side := immSide(in)
+	var a, b mir.VReg
+	if side != 0 {
+		var ok bool
+		if a, ok = vr.lookup(in.Arg(0)); !ok {
+			return fmt.Errorf("%s: operand defined outside the function", op)
+		}
 	}
-	b, ok := vr.lookup(in.Arg(1))
-	if !ok {
-		return fmt.Errorf("%s: operand defined outside the function", op)
+	if side != 1 {
+		var ok bool
+		if b, ok = vr.lookup(in.Arg(1)); !ok {
+			return fmt.Errorf("%s: operand defined outside the function", op)
+		}
 	}
 
 	result, err := vr.define(in.Result(0))
@@ -367,12 +375,134 @@ func iselBinary(mf *mir.Func, c *cursor, vr *vregs, in *ir.Inst) error {
 		return nil
 	}
 
+	// A literal second operand -- or first, where the verb commutes -- is
+	// the instruction's immediate rather than a register of its own.
+	iw, _ := immWidth(op.Type)
+	switch side {
+	case 1:
+		imm, _ := immOperand(in.Arg(1), iw)
+		c.Emit(mir.Instr{Op: aluImmOp{verb: op.Verb, w: w, imm: imm}, Defs: []mir.VReg{result}, Uses: []mir.VReg{a}})
+		return nil
+	case 0:
+		imm, _ := immOperand(in.Arg(0), iw)
+		c.Emit(mir.Instr{Op: aluImmOp{verb: op.Verb, w: w, imm: imm}, Defs: []mir.VReg{result}, Uses: []mir.VReg{b}})
+		return nil
+	}
+
 	c.Emit(mir.Instr{
 		Op:   aluOp{verb: op.Verb, w: w},
 		Defs: []mir.VReg{result},
 		Uses: []mir.VReg{a, b},
 	})
 	return nil
+}
+
+// immSide is which operand of a binary instruction is its immediate: 1
+// for a literal second operand, 0 for a literal first one where the verb
+// commutes, -1 for neither. It is the one place that decides, so that a
+// constant isel skips (constFolds) is one iselBinary never looks for.
+func immSide(in *ir.Inst) int {
+	op := in.Op()
+	w, ok := immWidth(op.Type)
+	if !ok || !immVerbs[op.Verb] || in.NumArgs() != 2 {
+		return -1
+	}
+	if _, ok := immOperand(in.Arg(1), w); ok {
+		return 1
+	}
+	if _, ok := immOperand(in.Arg(0), w); ok && op.Verb != ir.VSub {
+		return 0
+	}
+	return -1
+}
+
+// immWidth is the width an integer instruction of type t computes in,
+// and whether it has immediate forms at all. (w32 is width's zero value,
+// so the answer cannot double as the question.)
+func immWidth(t ir.RegType) (width, bool) {
+	switch t {
+	case ir.TypeI32:
+		return w32, true
+	case ir.TypeI64, ir.TypePtr:
+		return w64, true
+	}
+	return 0, false
+}
+
+// shiftByLiteral reports whether a shift's count is a literal, which
+// iselShift makes the immediate.
+func shiftByLiteral(in *ir.Inst) bool {
+	if _, ok := immWidth(in.Op().Type); !ok || !shiftOps[in.Op().Verb] || in.NumArgs() != 2 {
+		return false
+	}
+	_, ok := literal(in.Arg(1))
+	return ok
+}
+
+// constFolds reports whether every reader of a constant takes it as an
+// immediate, so that it needs no register and isel skips it.
+func constFolds(uses useIndex, k *ir.Inst) bool {
+	if k.Op().Verb != ir.VConst || len(k.Results()) != 1 {
+		return false
+	}
+	if _, ok := literal(k.Result(0)); !ok {
+		return false
+	}
+	refs := uses[k.Result(0)]
+	if len(refs) == 0 {
+		return false
+	}
+	for _, u := range refs {
+		if u.Target >= 0 {
+			return false
+		}
+		switch {
+		case immSide(u.Inst) == u.Index:
+		case u.Index == 1 && shiftByLiteral(u.Inst):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// immVerbs are the aluOp verbs with an immediate form. Sub is one only
+// with the literal second.
+var immVerbs = map[ir.Verb]bool{ir.VAdd: true, ir.VSub: true, ir.VAnd: true, ir.VOr: true, ir.VXor: true}
+
+// literal is the integer d's const instruction defines, if d is one.
+func literal(d *ir.Def) (int64, bool) {
+	if d == nil {
+		return 0, false
+	}
+	in := d.Inst()
+	if in == nil || in.Op().Verb != ir.VConst {
+		return 0, false
+	}
+	lit, ok := in.Lit()
+	if !ok || lit.Kind() != ir.ConstInt {
+		return 0, false
+	}
+	return lit.Int(), true
+}
+
+// immOperand is d as an immediate of an instruction of width w: any
+// literal for a 32-bit one (its low 32 bits are what the instruction
+// reads), one that fits sign-extended in 32 bits for a 64-bit one.
+func immOperand(d *ir.Def, w width) (int64, bool) {
+	v, ok := literal(d)
+	if !ok {
+		return 0, false
+	}
+	switch w {
+	case w32:
+		return int64(int32(uint32(v))), true
+	case w64:
+		if v == int64(int32(v)) {
+			return v, true
+		}
+	}
+	return 0, false
 }
 
 // iselCompare materializes a compare that something other than a branch
@@ -1363,16 +1493,27 @@ func iselShift(c *cursor, vr *vregs, in *ir.Inst) error {
 	if !ok {
 		return fmt.Errorf("%s: operand defined outside the function", op)
 	}
-	amt, ok := vr.lookup(in.Arg(1))
-	if !ok {
-		return fmt.Errorf("%s: shift amount defined outside the function", op)
-	}
 	result, err := vr.define(in.Result(0))
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 	w := vr.widthOfVReg(result)
 
+	// A literal count is the instruction's immediate, masked as the
+	// processor masks CL: no copy into CL, and no CL held for it.
+	if n, ok := literal(in.Arg(1)); ok && shiftByLiteral(in) {
+		bits := int64(32)
+		if w == w64 {
+			bits = 64
+		}
+		c.Emit(mir.Instr{Op: shiftImmOp{verb: op.Verb, w: w, n: n & (bits - 1)}, Defs: []mir.VReg{result}, Uses: []mir.VReg{a}})
+		return nil
+	}
+
+	amt, ok := vr.lookup(in.Arg(1))
+	if !ok {
+		return fmt.Errorf("%s: shift amount defined outside the function", op)
+	}
 	// The count's width is the namespace's — §A5 shifts an i64 by an
 	// i64 — but only CL is ever read, so the copy moves whichever half
 	// the value occupies and the shift ignores the rest.

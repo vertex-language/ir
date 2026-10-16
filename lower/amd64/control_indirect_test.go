@@ -72,9 +72,11 @@ func TestLowerBrTable(t *testing.T) {
 }
 
 // The regression test for the clobber. Eight values live into both
-// successors fill every caller-saved register, so the scratch cannot be
-// one — and that it is RBX, which the prologue below is saving, is the
-// proof: hard-coded scratch would have cost nothing here and been wrong.
+// successors fill the caller-saved registers, so the scratch cannot be
+// one of theirs — the prologue saving RBX for the eighth is the proof of
+// the pressure, and the lookup through a register none of them holds is
+// the proof the scratch was allocated: hard-coded, it would have been
+// wrong here.
 //
 // A prefix, because what regressed is the prologue and the lookup; the
 // summation after says nothing about the table.
@@ -82,15 +84,19 @@ func TestLowerBrTableScratchIsAllocated(t *testing.T) {
 	m := ir.NewModule("t", ir.X86_64Linux)
 	fn := m.Func("live8").Export()
 	sel := fn.ParamI32("sel")
+	x := fn.ParamI64("x")
 	fn.ReturnsI64()
 
 	entry := fn.Entry()
 	join := fn.Block("join")
 	def := fn.Block("def")
 
+	// Computed, not literal: a literal operand of an add is its immediate
+	// and holds no register, which would leave the pressure this test
+	// needs nowhere.
 	vals := make([]ir.I64, 8)
 	for i := range vals {
-		vals[i] = entry.I64.Const(int64(i + 1))
+		vals[i] = entry.I64.Add(x, entry.I64.Const(int64(i+1)))
 	}
 	entry.BrTable(sel, []ir.BlockTarget{join.To(), def.To()}, def.To())
 
@@ -119,13 +125,15 @@ func TestLowerBrTableScratchIsAllocated(t *testing.T) {
 			"got  % x\nwant % x", tb[:min(len(tb), len(prologue))], prologue)
 	}
 
-	// And the lookup itself uses that register, not one of the eight.
+	// And the lookup itself uses an allocated register, not one of the
+	// eight: RSI, which held x and is free once the eight are computed.
+	// (RBX holds the eighth value, which is why the prologue saves it.)
 	lookup := []byte{
-		0x48, 0x8d, 0x1d, 0x00, 0x00, 0x00, 0x00, // lea rbx, [rip + live8.table]
-		0xff, 0x24, 0xfb, // jmp [rbx + rdi*8]
+		0x48, 0x8d, 0x35, 0x00, 0x00, 0x00, 0x00, // lea rsi, [rip + live8.table]
+		0xff, 0x24, 0xfe, // jmp [rsi + rdi*8]
 	}
 	if !bytes.Contains(tb, lookup) {
-		t.Errorf(".text does not contain the table lookup through RBX\ngot % x", tb)
+		t.Errorf(".text does not contain the table lookup through RSI\ngot % x", tb)
 	}
 	objdumpHas(t, "live8", raw, "jmpq")
 }

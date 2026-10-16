@@ -88,7 +88,7 @@ func TestLowerPtrConstIsNull(t *testing.T) {
 	tb, _ := lowerText(t, m)
 
 	want := []byte{
-		0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, // movabs rax, 0
+		0xb8, 0, 0, 0, 0, // mov eax, 0   (zero-extends: rax is null)
 		0xc3, // ret
 	}
 	if !bytes.Equal(tb, want) {

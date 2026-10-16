@@ -89,6 +89,12 @@ func iselBlock(fn *ir.Func, mf *mir.Func, c *cursor, vr *vregs, fr *frame, blk *
 	if fused != nil && fusesEveryUse(uses, fused) {
 		skip[fused] = true
 	}
+	// A constant every reader takes as an immediate is never a register.
+	for _, in := range blk.Insts() {
+		if constFolds(uses, in) {
+			skip[in] = true
+		}
+	}
 	for _, in := range blk.Insts() {
 		if in.Op().Verb != ir.VSelect {
 			continue

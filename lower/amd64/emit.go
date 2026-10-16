@@ -289,6 +289,91 @@ func usedCalleeSaved(abi string, pool *regalloc.Pool, assigned map[mir.VReg]rega
 	return out
 }
 
+// aluImm32 and aluImm64 are aluImmOps' encodings: the one-byte immediate
+// where the value fits it, the four-byte one otherwise.
+func aluImm32(text *amd64asm.Section, v ir.Verb, dst reg.R32, imm int64) {
+	short := imm == int64(int8(imm))
+	switch {
+	case v == ir.VAdd && short:
+		text.AddRM32Imm8(dst, imm)
+	case v == ir.VAdd:
+		text.AddRM32Imm32(dst, imm)
+	case v == ir.VSub && short:
+		text.SubRM32Imm8(dst, imm)
+	case v == ir.VSub:
+		text.SubRM32Imm32(dst, imm)
+	case v == ir.VAnd && short:
+		text.AndRM32Imm8(dst, imm)
+	case v == ir.VAnd:
+		text.AndRM32Imm32(dst, imm)
+	case v == ir.VOr && short:
+		text.OrRM32Imm8(dst, imm)
+	case v == ir.VOr:
+		text.OrRM32Imm32(dst, imm)
+	case v == ir.VXor && short:
+		text.XorRM32Imm8(dst, imm)
+	case v == ir.VXor:
+		text.XorRM32Imm32(dst, imm)
+	}
+}
+
+func aluImm64(text *amd64asm.Section, v ir.Verb, dst reg.R64, imm int64) {
+	short := imm == int64(int8(imm))
+	switch {
+	case v == ir.VAdd && short:
+		text.AddRM64Imm8(dst, imm)
+	case v == ir.VAdd:
+		text.AddRM64Imm32(dst, imm)
+	case v == ir.VSub && short:
+		text.SubRM64Imm8(dst, imm)
+	case v == ir.VSub:
+		text.SubRM64Imm32(dst, imm)
+	case v == ir.VAnd && short:
+		text.AndRM64Imm8(dst, imm)
+	case v == ir.VAnd:
+		text.AndRM64Imm32(dst, imm)
+	case v == ir.VOr && short:
+		text.OrRM64Imm8(dst, imm)
+	case v == ir.VOr:
+		text.OrRM64Imm32(dst, imm)
+	case v == ir.VXor && short:
+		text.XorRM64Imm8(dst, imm)
+	case v == ir.VXor:
+		text.XorRM64Imm32(dst, imm)
+	}
+}
+
+// shiftImm32 and shiftImm64 are shiftImmOps' encodings.
+func shiftImm32(text *amd64asm.Section, v ir.Verb, dst reg.R32, n int64) {
+	switch v {
+	case ir.VShl:
+		text.ShlRM32Imm8(dst, n)
+	case ir.VSShr:
+		text.SarRM32Imm8(dst, n)
+	case ir.VUShr:
+		text.ShrRM32Imm8(dst, n)
+	case ir.VRotL:
+		text.RolRM32Imm8(dst, n)
+	case ir.VRotR:
+		text.RorRM32Imm8(dst, n)
+	}
+}
+
+func shiftImm64(text *amd64asm.Section, v ir.Verb, dst reg.R64, n int64) {
+	switch v {
+	case ir.VShl:
+		text.ShlRM64Imm8(dst, n)
+	case ir.VSShr:
+		text.SarRM64Imm8(dst, n)
+	case ir.VUShr:
+		text.ShrRM64Imm8(dst, n)
+	case ir.VRotL:
+		text.RolRM64Imm8(dst, n)
+	case ir.VRotR:
+		text.RorRM64Imm8(dst, n)
+	}
+}
+
 // alu32 and alu64 are binOps' two encoding tables, typed by width.
 func alu32(text *amd64asm.Section, v ir.Verb, dst, src reg.R32) {
 	switch v {
@@ -493,6 +578,32 @@ func emit(am *amd64asm.Module, text *amd64asm.Section, fn *ir.Func, mf *mir.Func
 					text.MovR64RM64(r64(dst), r64(a))
 				}
 				alu64(text, op.verb, r64(dst), r64(b))
+			case aluImmOp:
+				dst, a := in.Defs[0], in.Uses[0]
+				if op.w == w32 {
+					if r32(dst) != r32(a) {
+						text.MovR32RM32(r32(dst), r32(a))
+					}
+					aluImm32(text, op.verb, r32(dst), op.imm)
+					break
+				}
+				if r64(dst) != r64(a) {
+					text.MovR64RM64(r64(dst), r64(a))
+				}
+				aluImm64(text, op.verb, r64(dst), op.imm)
+			case shiftImmOp:
+				dst, a := in.Defs[0], in.Uses[0]
+				if op.w == w32 {
+					if r32(dst) != r32(a) {
+						text.MovR32RM32(r32(dst), r32(a))
+					}
+					shiftImm32(text, op.verb, r32(dst), op.n)
+					break
+				}
+				if r64(dst) != r64(a) {
+					text.MovR64RM64(r64(dst), r64(a))
+				}
+				shiftImm64(text, op.verb, r64(dst), op.n)
 			case unOp:
 				dst, a := in.Defs[0], in.Uses[0]
 				if op.w == w32 {
@@ -1218,15 +1329,19 @@ func emit(am *amd64asm.Module, text *amd64asm.Section, fn *ir.Func, mf *mir.Func
 					text.MovR32Imm32(r32(in.Defs[0]), op.imm)
 					break
 				}
-				// The full ten-byte movabs, unconditionally. A
-				// value that fits in 32 bits could be five bytes
-				// as a move to the 32-bit view, which zero-extends,
-				// or seven as the sign-extended MovRM64Imm32 — and
-				// both of those are peepholes. This package has no
-				// pass to put a peephole in, and choosing an
-				// encoding by the value at isel time would put one
-				// here, where the reason for it could not be read.
-				text.MovR64Imm64(r64(in.Defs[0]), uint64(op.imm))
+				// The shortest move that leaves the 64-bit value: five
+				// bytes to the 32-bit view, which zero-extends, for one
+				// that fits unsigned in 32 bits; seven sign-extended
+				// for a small negative one; the ten-byte movabs only
+				// for the rest.
+				switch {
+				case op.imm >= 0 && op.imm <= 0xFFFFFFFF:
+					text.MovR32Imm32(r32(in.Defs[0]), op.imm)
+				case op.imm == int64(int32(op.imm)):
+					text.MovRM64Imm32(r64(in.Defs[0]), op.imm)
+				default:
+					text.MovR64Imm64(r64(in.Defs[0]), uint64(op.imm))
+				}
 			}
 		}
 	}

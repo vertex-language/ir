@@ -130,6 +130,20 @@ type (
 		verb ir.Verb
 		w    width
 	}
+	// aluImmOp is an aluOp whose second operand is a literal that fits
+	// a sign-extended 32-bit immediate: one instruction, and no register
+	// for the constant. Uses[0] is the first operand.
+	aluImmOp struct {
+		verb ir.Verb
+		w    width
+		imm  int64
+	}
+	// shiftImmOp is a shiftOp by a literal count, which needs no CL.
+	shiftImmOp struct {
+		verb ir.Verb
+		w    width
+		n    int64
+	}
 	// cmovOp is §F's select.
 	cmovOp struct {
 		cond condCode
