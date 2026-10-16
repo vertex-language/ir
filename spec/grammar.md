@@ -296,6 +296,9 @@ func-def           ::= linkage? visibility? "weak"? "func" FuncName signature
 func-placement     ::= "section" string | "comdat" string? | "nounwind"
                      | "personality" FuncName | "returns_twice"
                      | "naked" | "noreturn" | "align" unsigned
+                     | "requires" "(" capability ( "," capability )* ")"
+capability         ::= "aes" | "clmul" | "sha1" | "sha256" | "sha512"
+                     | "sm3" | "sm4" | "crc32" | "crc32c"
 import-placement   ::= "nounwind" | "returns_twice" | "noreturn"
 
 signature          ::= callconv? "(" def-param-list? var-tail? ")" ret?
@@ -670,6 +673,19 @@ inst-barrier  ::= "barrier"
 The first four `workitem-verb`s take an `axis`; the last two take none. The
 axis is a literal because the hardware's is: there is no register that
 holds "which axis", only three of each register.
+
+## 12c. Processor capabilities
+
+```ebnf
+inst-cpu-has  ::= register "=" "i1.cpu_has" capability
+```
+
+The capability is a literal, as an axis is, and for the reason the
+instruction index gives (§P): a capability the module's baseline includes
+answers `1` at lowering, which a register could not let it do. `requires`
+(§6) is a set, not a list — order and repetition say nothing — and a
+function's body may use the instructions of exactly the capabilities it
+names, besides the module's own.
 
 ## 13. Calls
 

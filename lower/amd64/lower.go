@@ -341,6 +341,12 @@ func Lower(m *ir.Module, opts Options) (*amd64obj.Object, error) {
 		return nil, err
 	}
 
+	// §V5 and §A8 are calls here until this package selects their
+	// instructions (§0), and the §V verbs SSE2 has no instruction for are
+	// rewritten into the ones it has.
+	m.LegalizeCryptoAll()
+	m.ExpandVectorVerbs(func(ir.Verb) bool { return true })
+
 	am := amd64asm.NewModule(amd64asm.WithFeatures(opts.features()))
 
 	// A weak import is a reference the link may leave unresolved.

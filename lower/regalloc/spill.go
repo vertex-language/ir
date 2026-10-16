@@ -46,6 +46,23 @@ type Spiller interface {
 	Load(slot int, v mir.VReg, c Class) mir.Instr
 }
 
+// A ValueSlotter is a Spiller whose slots differ by value: a target with
+// registers of more than one width in one class -- a double and a 128-bit
+// vector in the same file -- asks for each value's own, and Slot is not
+// called for that value.
+type ValueSlotter interface {
+	Spiller
+	SlotFor(v mir.VReg) int
+}
+
+// slotOf is v's slot from sp, asked per value where sp can answer so.
+func slotOf(sp Spiller, v mir.VReg) int {
+	if vs, ok := sp.(ValueSlotter); ok {
+		return vs.SlotFor(v)
+	}
+	return sp.Slot()
+}
+
 // A Rematerializer is a Spiller that can say an instruction is cheaper
 // to repeat than its result is to store: a constant, typically. A value
 // with one such def and no operands is not spilled to memory; the def
@@ -124,7 +141,7 @@ func (st *spillState) spill(f *mir.Func, pool *Pool, sp Spiller, v mir.VReg) {
 		st.remat(f, v, def, fresh)
 		return
 	}
-	slot := sp.Slot()
+	slot := slotOf(sp, v)
 
 	for _, b := range f.Blocks {
 		out := make([]mir.Instr, 0, len(b.Instrs))

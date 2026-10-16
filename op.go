@@ -434,4 +434,79 @@ const (
 	VI64x2Splat     Verb = "i64x2_splat"
 	VI64x2UnpackLow Verb = "i64x2_unpack_low"
 	VI64x2UnpackHi  Verb = "i64x2_unpack_high"
+
+	// The variable byte permute, and the lane byte swaps a big-endian
+	// load is. See §V4.
+	VI8x16Swizzle Verb = "i8x16_swizzle" // zero where an index is 16 or more
+	VI16x8Bswap   Verb = "i16x8_bswap"
+	VI32x4Bswap   Verb = "i32x4_bswap"
+	VI64x2Bswap   Verb = "i64x2_bswap"
+
+	// Three-input bitwise verbs and lane rotates by a literal: general
+	// operations, which Keccak, ChaCha20 and BLAKE are made of but which
+	// are no algorithm's. See §V1 and §V3.
+	VVecXor3      Verb = "xor3"       // a ^ b ^ c
+	VVecXorAndNot Verb = "xor_andnot" // a ^ (b AND NOT c)
+	VI32x4Rotl    Verb = "i32x4_rotl" // literal count
+	VI64x2Rotl    Verb = "i64x2_rotl"
+)
+
+// §V5's cryptographic verbs, and §A8's checksums. Each is one capability's
+// (§P); where a verb has a literal, it is in the instruction's imm. The
+// definitions are the spec's: where the two architectures cut a step
+// differently, the verb is the algorithm's own cut.
+const (
+	// AES, on a state and a round key in FIPS-197's byte order.
+	VAesEnc           Verb = "aes_enc"      // SubBytes, ShiftRows, MixColumns, xor key
+	VAesEncLast       Verb = "aes_enc_last" // no MixColumns
+	VAesDec           Verb = "aes_dec"      // the equivalent inverse cipher's round
+	VAesDecLast       Verb = "aes_dec_last"
+	VAesInvMixColumns Verb = "aes_inv_mix_columns"
+	VAesKeygenAssist  Verb = "aes_keygen_assist" // literal rcon
+
+	// Carry-less multiply of one i64 lane of each operand; the literal's
+	// bit 0 picks a's lane, bit 1 b's.
+	VI64x2Clmul Verb = "i64x2_clmul"
+
+	// SHA-1 and SHA-256, on i32x4 in the algorithm's word order.
+	VSha1RoundsCh     Verb = "sha1_rounds_ch"
+	VSha1RoundsParity Verb = "sha1_rounds_parity"
+	VSha1RoundsMaj    Verb = "sha1_rounds_maj"
+	VSha1Msg1         Verb = "sha1_msg1"
+	VSha1Msg2         Verb = "sha1_msg2"
+	VSha256RoundsAbcd Verb = "sha256_rounds_abcd"
+	VSha256RoundsEfgh Verb = "sha256_rounds_efgh"
+	VSha256Msg1       Verb = "sha256_msg1"
+	VSha256Msg2       Verb = "sha256_msg2"
+
+	// SHA-512, Arm's SHA512H, SHA512H2, SHA512SU0, SHA512SU1.
+	VSha512Rounds1 Verb = "sha512_rounds_1"
+	VSha512Rounds2 Verb = "sha512_rounds_2"
+	VSha512Msg1    Verb = "sha512_msg1"
+	VSha512Msg2    Verb = "sha512_msg2"
+
+	// SM3 and SM4, Arm's instructions operand for operand.
+	VSm3Ss1    Verb = "sm3_ss1"
+	VSm3Tt1a   Verb = "sm3_tt1a" // literal lane
+	VSm3Tt1b   Verb = "sm3_tt1b"
+	VSm3Tt2a   Verb = "sm3_tt2a"
+	VSm3Tt2b   Verb = "sm3_tt2b"
+	VSm3Partw1 Verb = "sm3_partw1"
+	VSm3Partw2 Verb = "sm3_partw2"
+	VSm4Rounds Verb = "sm4_rounds"
+	VSm4Key    Verb = "sm4_key"
+
+	// §A8: CRC-32C (Castagnoli) and CRC-32 (IEEE 802.3), reflected, no
+	// inversion either side; the suffix is how much of data is folded in.
+	VCrc32cU8  Verb = "crc32c_u8"
+	VCrc32cU16 Verb = "crc32c_u16"
+	VCrc32cU32 Verb = "crc32c_u32"
+	VCrc32cU64 Verb = "crc32c_u64"
+	VCrc32U8   Verb = "crc32_u8"
+	VCrc32U16  Verb = "crc32_u16"
+	VCrc32U32  Verb = "crc32_u32"
+	VCrc32U64  Verb = "crc32_u64"
+
+	// §P: whether the processor running this has a capability.
+	VCpuHas Verb = "cpu_has"
 )

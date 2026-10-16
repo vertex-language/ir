@@ -167,3 +167,39 @@ func TestInlineRecursion(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A callee that requires a capability its caller does not is the hardware
+// path of a choice: a choosing policy leaves it a call, and the caller
+// that requires it too takes the copy.
+func TestInlineKeepsRequires(t *testing.T) {
+	m := ir.NewModule("m", ir.AArch64Linux)
+	h := m.Func("enc").Internal().Requires(ir.CapAES).ReturnsI32().NoUnwind()
+	x := h.ParamI32("x")
+	he := h.Entry()
+	he.Return(he.I32.Add(x, he.I32.Const(1)))
+
+	build := func(name string, caps ...ir.Capability) *ir.Func {
+		f := m.Func(name).Export().Requires(caps...).ReturnsI32().NoUnwind()
+		a := f.ParamI32("a")
+		e := f.Entry()
+		e.Return(e.Call(h, a).I32(0))
+		return f
+	}
+	plainCaller := build("plain")
+	hwCaller := build("hw", ir.CapAES, ir.CapClmul)
+
+	yes := inline.Options{Should: func(_, _ *ir.Func) bool { return true }}
+	for _, f := range []*ir.Func{plainCaller, hwCaller} {
+		if err := inline.Func(f, yes); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := format(t, m)
+	plainText := got[strings.Index(got, "@plain"):strings.Index(got, "@hw")]
+	if !strings.Contains(plainText, "call @enc") {
+		t.Errorf("@plain had @enc copied in:\n%s", got)
+	}
+	if strings.Contains(got[strings.Index(got, "@hw"):], "call @enc") {
+		t.Errorf("@hw still calls @enc:\n%s", got)
+	}
+}

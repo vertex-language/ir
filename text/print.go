@@ -435,6 +435,9 @@ func (pr *printer) fn(f *ir.Func) {
 	if f.IsNoReturn() {
 		pr.s(" noreturn")
 	}
+	if cs := f.RequiresAttr(); cs != 0 {
+		pr.f(" requires (%s)", cs)
+	}
 	pr.attached(f.Attached())
 	pr.s(" {\n")
 
@@ -588,6 +591,9 @@ func (pr *printer) inst(in *ir.Inst) {
 	}
 	if a, ok := in.Axis(); ok {
 		pr.f(" %s", a)
+	}
+	if c, ok := in.Capability(); ok {
+		pr.f(" %s", c)
 	}
 	if n, ok := in.Align(); ok {
 		pr.f(" align %d", n)

@@ -1,6 +1,7 @@
 package arm64
 
 import (
+	"github.com/vertex-language/arm64/operand"
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/ir/lower/mir"
 	"github.com/vertex-language/ir/lower/regalloc"
@@ -26,8 +27,9 @@ import (
 // What it does, in the order it does it:
 //
 //  1. A constant whose only reader is an add, subtract, compare, shift,
-//     multiply or flag-setting add is folded into that instruction's
-//     immediate field, where the field can hold it.
+//     multiply, and, or, xor or flag-setting add is folded into that
+//     instruction's immediate field, where the field can hold it; zero
+//     minus a register is NEG.
 //  2. An add whose only reader is a load or store becomes that access's
 //     addressing mode: a displacement when the add was by a literal, a
 //     register offset when it was of two registers.
@@ -169,6 +171,11 @@ func foldConstantInto(in *mir.Instr, v mir.VReg, imm int64) bool {
 			in.Uses = []mir.VReg{other}
 			return true
 		case ir.VSub:
+			if a == v && b != v && imm == 0 {
+				in.Op = unOp{verb: ir.VNeg, w: op.w}
+				in.Uses = []mir.VReg{b}
+				return true
+			}
 			if b != v || a == v || !fitsArith(-imm) {
 				return false
 			}
@@ -195,6 +202,21 @@ func foldConstantInto(in *mir.Instr, v mir.VReg, imm int64) bool {
 				return true
 			}
 			return false
+		case ir.VAnd, ir.VOr, ir.VXor:
+			other := a
+			if a == v {
+				other = b
+			}
+			bits, ow := uint64(imm), operand.Width64
+			if op.w == w32 {
+				bits, ow = bits&0xffffffff, operand.Width32
+			}
+			if !operand.BitmaskEncodable(bits, ow) {
+				return false
+			}
+			in.Op = logicImmOp{verb: op.verb, imm: bits, w: op.w}
+			in.Uses = []mir.VReg{other}
+			return true
 		case ir.VShl, ir.VUShr, ir.VSShr:
 			bits := int64(64)
 			if op.w == w32 {
@@ -302,6 +324,8 @@ func accessBytes(w width) int64 {
 	switch w {
 	case w32, wf32:
 		return 4
+	case wv128:
+		return 16
 	}
 	return 8
 }

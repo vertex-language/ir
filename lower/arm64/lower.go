@@ -81,15 +81,22 @@ import (
 
 	"github.com/vertex-language/arm64/reg"
 	"github.com/vertex-language/ir"
+	"github.com/vertex-language/ir/lower/inline"
 	"github.com/vertex-language/ir/lower/mir"
 	"github.com/vertex-language/ir/lower/regalloc"
 )
 
-// OptLevel is how hard Lower tries. Only O0 exists today, and it already
-// promotes frame slots (ir.PromoteSlots) and runs the peephole pass.
+// OptLevel is how hard Lower tries. O0 lowers each function as it is
+// given, and already promotes frame slots (ir.PromoteSlots) and runs the
+// peephole pass; O1 first runs ir.Func.Optimize on it and inlines the
+// small callees, which a frontend that leaves the cleanup to the backend
+// (vsc) wants and a test of one lowering does not.
 type OptLevel uint8
 
-const O0 OptLevel = iota
+const (
+	O0 OptLevel = iota
+	O1
+)
 
 // A VariadicABI is which of AAPCS64's two variadic conventions a target uses.
 //
@@ -163,7 +170,15 @@ func Lower(m *ir.Module, opts Options) (*arm64obj.Object, error) {
 		return nil, err
 	}
 
-	am := arm64asm.NewModule(arm64asm.WithFeatures(opts.features()))
+	// What a function may not execute becomes a call (§0), and the
+	// assembler is told every feature some function requires: the rows
+	// themselves are gated, and a requires function's are its own.
+	m.LegalizeCrypto(capabilitiesOf(opts.features()))
+	asmFeatures := opts.features()
+	for _, f := range m.Funcs() {
+		asmFeatures = asmFeatures.Plus(featuresOf(f.RequiresAttr())...)
+	}
+	am := arm64asm.NewModule(arm64asm.WithFeatures(asmFeatures))
 
 	// A weak import is a reference the link may leave unresolved.
 	for _, f := range m.FuncImports() {
@@ -189,6 +204,26 @@ func Lower(m *ir.Module, opts Options) (*arm64obj.Object, error) {
 
 	if err := lowerGlobals(am, m, opts); err != nil {
 		return nil, err
+	}
+
+	if opts.OptLevel >= O1 {
+		// The small callees -- a rotate, a getter, a helper of a few
+		// operations -- are copied into their callers before anything is
+		// lowered, so that ir.Func.Optimize sees through them and no call
+		// is paid for an operation or two. Every body is cleaned up
+		// first, so that a callee is measured as it will be lowered.
+		// This is the whole module at once, before prepareAll works on
+		// functions side by side: inlining reads its callees.
+		for _, f := range m.Funcs() {
+			if _, asm := f.AsmBodyText(); !asm && len(f.Blocks()) > 0 {
+				f.Optimize()
+			}
+		}
+		for _, f := range m.Funcs() {
+			if err := inline.Func(f, inline.Options{Should: smallCallee}); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	// Items rather than Funcs, because a module-level asm block has a
@@ -388,6 +423,11 @@ type prepared struct {
 
 // prepareFunc runs one function's pipeline up to emission.
 func prepareFunc(fn *ir.Func, opts Options) (*prepared, error) {
+	if opts.OptLevel >= O1 {
+		// Lower ran ir.Func.Optimize on every function before inlining;
+		// what inlining brought in is folded, merged and numbered here.
+		fn.Tidy()
+	}
 	// Locals a frontend put in frame slots and never took the address of
 	// become registers before the frame is planned, so that they take no
 	// frame space and cost no load or store. See ir.PromoteSlots.
@@ -470,7 +510,7 @@ func prepareFunc(fn *ir.Func, opts Options) (*prepared, error) {
 
 	peephole(mf)
 
-	assigned, err := regalloc.Spilling(mf, pool, &spiller{fr: fr})
+	assigned, err := regalloc.Spilling(mf, pool, &spiller{fr: fr, vr: vr})
 	if err != nil {
 		return nil, fmt.Errorf("lower: %s: regalloc: %w", fn.Name(), err)
 	}
@@ -490,8 +530,12 @@ func prepareFunc(fn *ir.Func, opts Options) (*prepared, error) {
 // exception tables.
 func emitFunc(am *arm64asm.Module, text *arm64asm.Section, p *prepared, opts Options) error {
 	fn, mf, fr, plan, assigned, sv := p.fn, p.mf, p.fr, p.plan, p.assigned, p.sv
+	bp, err := planBranches(am.Features(), fn, mf, assigned, fr, sv)
+	if err != nil {
+		return err
+	}
 	start := text.Offset()
-	if err := emit(am, text, fn, mf, assigned, fr, sv, plan); err != nil {
+	if err := emit(am, text, fn, mf, assigned, fr, sv, plan, bp); err != nil {
 		return err
 	}
 	if !opts.darwin() {
@@ -545,3 +589,26 @@ func windowSize(workers int) int {
 	}
 	return 16 * workers
 }
+
+// smallCallee is O1's inlining policy: a callee of at most smallInsts
+// instructions that allocates no stack slot, which inlined into a loop
+// would be one more slot for every iteration's copy of the body.
+func smallCallee(_, callee *ir.Func) bool {
+	n := 0
+	for _, b := range callee.Blocks() {
+		for _, in := range b.Insts() {
+			switch in.Op().Verb {
+			case ir.VAlloc, ir.VStackSave, ir.VInvoke, ir.VInvokeInd:
+				return false
+			}
+			n++
+			if n > smallInsts {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// smallInsts is how many instructions a callee O1 inlines may have.
+const smallInsts = 40

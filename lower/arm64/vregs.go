@@ -122,8 +122,24 @@ func (v *vregs) fresh(w width) mir.VReg {
 	}
 	v.width[r] = w
 	v.pool.Classify(r, w.class())
+	if w == wv128 {
+		// A call keeps only the low half of V8-V15, so a whole vector
+		// lives where a call destroys all of it, and is spilled across one
+		// like any other caller-saved value -- rather than surviving it
+		// with its top half gone.
+		v.pool.Restrict(r, callerSavedVecRegs)
+	}
 	return r
 }
+
+// callerSavedVecRegs is callerSavedVec as the pool names registers.
+var callerSavedVecRegs = func() []regalloc.PhysReg {
+	out := make([]regalloc.PhysReg, len(callerSavedVec))
+	for i, r := range callerSavedVec {
+		out[i] = regalloc.PhysReg(r)
+	}
+	return out
+}()
 
 // temp allocates a fresh vreg belonging to no ir.Def.
 func (v *vregs) temp(w width) mir.VReg { return v.fresh(w) }
@@ -165,14 +181,35 @@ func (v *vregs) nextAsmID() int {
 }
 
 // spiller is what regalloc calls when it runs out of registers.
-type spiller struct{ fr *frame }
+type spiller struct {
+	fr *frame
+	vr *vregs
+
+	// wideSlot is the slots SlotFor gave a v128. Store and Load are handed
+	// the fresh vregs regalloc made for each access, which vr never saw,
+	// so the slot is what remembers how wide its value is.
+	wideSlot map[int]bool
+}
 
 func (s *spiller) Slot() int { return int(s.fr.reserve()) }
 
+// SlotFor is eight bytes, or sixteen for a v128: the vector file holds both.
+func (s *spiller) SlotFor(v mir.VReg) int {
+	if s.vr != nil && s.vr.widthOfVReg(v) == wv128 {
+		slot := int(s.fr.reserveBytes(16, 16))
+		if s.wideSlot == nil {
+			s.wideSlot = map[int]bool{}
+		}
+		s.wideSlot[slot] = true
+		return slot
+	}
+	return int(s.fr.reserve())
+}
+
 func (s *spiller) Store(slot int, v mir.VReg, c regalloc.Class) mir.Instr {
-	return mir.Instr{Op: spillOp{off: int64(slot), float: c == vecClass}, Uses: []mir.VReg{v}}
+	return mir.Instr{Op: spillOp{off: int64(slot), float: c == vecClass, wide: s.wideSlot[slot]}, Uses: []mir.VReg{v}}
 }
 
 func (s *spiller) Load(slot int, v mir.VReg, c regalloc.Class) mir.Instr {
-	return mir.Instr{Op: reloadOp{off: int64(slot), float: c == vecClass}, Defs: []mir.VReg{v}}
+	return mir.Instr{Op: reloadOp{off: int64(slot), float: c == vecClass, wide: s.wideSlot[slot]}, Defs: []mir.VReg{v}}
 }

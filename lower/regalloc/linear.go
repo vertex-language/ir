@@ -793,7 +793,7 @@ func spillAll(f *mir.Func, pool *Pool, sp Spiller, st *spillState, vs []mir.VReg
 			remat[v] = true
 			continue
 		}
-		slot[v] = sp.Slot()
+		slot[v] = slotOf(sp, v)
 	}
 
 	for _, b := range f.Blocks {

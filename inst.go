@@ -227,6 +227,9 @@ type imm struct {
 	axis    Axis // §W's literal axis
 	hasAxis bool
 
+	capa    Capability // §P's literal capability
+	hasCapa bool
+
 	asm *Asm
 }
 
@@ -395,6 +398,15 @@ func (in *Inst) Axis() (Axis, bool) {
 	return in.im.axis, in.im.hasAxis
 }
 
+// Capability returns i1.cpu_has's literal capability and whether the verb
+// takes one.
+func (in *Inst) Capability() (Capability, bool) {
+	if in.im == nil {
+		return 0, false
+	}
+	return in.im.capa, in.im.hasCapa
+}
+
 // Asm returns the inline-assembly payload.
 func (in *Inst) Asm() *Asm {
 	if in.im == nil {
@@ -449,3 +461,4 @@ func (r Results) F128(i int) F128 { return F128{r.at(i, TypeF128)} }
 func (r Results) Ptr(i int) Ptr   { return Ptr{r.at(i, TypePtr)} }
 func (r Results) F16(i int) F16   { return F16{r.at(i, TypeF16)} }
 func (r Results) BF16(i int) BF16 { return BF16{r.at(i, TypeBF16)} }
+func (r Results) V128(i int) V128 { return V128{r.at(i, TypeV128)} }

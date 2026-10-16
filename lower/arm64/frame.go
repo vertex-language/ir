@@ -541,6 +541,8 @@ func classifyAAPCS(args []abiArg, sret ir.FType, sretMem bool, apple bool) ([]pl
 					size = uint64(a.narrow)
 				case w == w32 || w == wf32:
 					size = 4
+				case w == wv128:
+					size = 16
 				}
 				p := toStackPacked(size)
 				p.w = w
@@ -550,6 +552,9 @@ func classifyAAPCS(args []abiArg, sret ir.FType, sretMem bool, apple bool) ([]pl
 				out[i] = p
 			default:
 				p := toStack(8, 8)
+				if w == wv128 {
+					p = toStack(16, 16)
+				}
 				p.w = w
 				out[i] = p
 			}

@@ -323,6 +323,7 @@ type Func struct {
 	naked        bool
 	noreturn     bool
 	align        uint64
+	requires     Capabilities
 
 	asmBody    string
 	hasAsmBody bool
@@ -364,6 +365,10 @@ func (f *Func) PersonalityFn() Callee { return f.personality }
 func (f *Func) IsReturnsTwice() bool  { return f.returnsTwice }
 func (f *Func) IsNaked() bool         { return f.naked }
 func (f *Func) IsNoReturn() bool      { return f.noreturn }
+
+// RequiresAttr is the set of capabilities the function's body may use
+// beyond the module's baseline (§P).
+func (f *Func) RequiresAttr() Capabilities { return f.requires }
 func (f *Func) AlignAttr() uint64     { return f.align }
 func (f *Func) Attached() []Attach    { return f.meta }
 
@@ -406,6 +411,10 @@ func (f *Func) NoUnwind() *Func     { f.nounwind = true; return f }
 func (f *Func) ReturnsTwice() *Func { f.returnsTwice = true; return f }
 func (f *Func) Naked() *Func        { f.naked = true; return f }
 func (f *Func) NoReturn() *Func     { f.noreturn = true; return f }
+
+// Requires adds cs to the capabilities the body may use directly: the
+// hardware path of a library that picks it with i1.cpu_has.
+func (f *Func) Requires(cs ...Capability) *Func { f.requires = f.requires.With(cs...); return f }
 
 // Personality names the personality routine. A function containing invoke,
 // invokeind, or a pad block declares one (§19.4).

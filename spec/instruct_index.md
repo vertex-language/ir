@@ -2,7 +2,7 @@
 
 Normative on instruction shape, operand types, and result types.
 
-Sections run §0, §A–§I, §V, §W, §K and §L. There is no §J; the letter is
+Sections run §0, §A–§I, §V, §P, §W, §K and §L. There is no §J; the letter is
 unassigned and reserved, so that a citation to `§K` in an older document still
 means what it meant.
 
@@ -263,6 +263,24 @@ leaves this undefined; the IR does not.
 | `ptr.const` | `0` | `ptr` — null only |
 
 A non-null absolute address is `ptr.from_i64` of an `i64.const`.
+
+## A8. Checksums
+
+| Instruction | Operands | Result |
+| --- | --- | --- |
+| `i32.crc32c_u8` / `_u16` / `_u32` | `i32 crc, i32 data` | `i32` — the low 8, 16 or 32 bits of `data` folded in |
+| `i32.crc32c_u64` | `i32 crc, i64 data` | `i32` |
+| `i32.crc32_u8` / `_u16` / `_u32` | `i32 crc, i32 data` | `i32` |
+| `i32.crc32_u64` | `i32 crc, i64 data` | `i32` |
+
+`crc32c` is the Castagnoli polynomial (0x1EDC6F41) and `crc32` the IEEE 802.3
+one (0x04C11DB7), both bit-reflected, the data consumed least significant
+byte first. Neither inverts its input or its output: the `~0` a protocol
+starts from and the `~` it ends with are the caller's, because some
+protocols do neither. These are the instructions' definitions — SSE4.2's
+`crc32` is `crc32c` here, Arm's `crc32cx` is `crc32c_u64` and its `crc32x` is
+`crc32_u64`. x86-64 has no `crc32`; per §0 its lowering is a call. The
+capabilities are `crc32c` and `crc32` (§P).
 
 ## B. Comparisons
 
@@ -763,6 +781,8 @@ target has the instruction.
 | `v128.zext_i64` | `i64` | `v128` — low lane, rest zero |
 | `v128.load` / `v128.store` | §D's shapes | `v128` / — |
 | `v128.select` | `i1, v128, v128` | `v128` — §F, one condition for all lanes |
+| `v128.xor3` | `v128 a, v128 b, v128 c` | `v128` — `a ⊕ b ⊕ c` |
+| `v128.xor_andnot` | `v128 a, v128 b, v128 c` | `v128` — `a ⊕ (b AND NOT c)` |
 
 `v128.const`'s literal is bytes and not a number because a number would mean
 choosing a lane width and an endianness to read it at. A frontend that has
@@ -770,6 +790,11 @@ lane values converts them once, here.
 
 `v128.zext_i32` is not a splat, and the difference is load-bearing: it builds
 a vector from one scalar without filling the lanes a splat would fill.
+
+The two three-input rows are the bitwise steps Keccak-f and the BLAKE family
+are made of, and they are named for what they compute rather than for
+either: Arm's `eor3` and `bcax` and AVX-512's `vpternlogq` are each one
+instruction for them, and every other target writes two.
 
 ### V2. Lane arithmetic
 
@@ -802,7 +827,13 @@ two instructions rather than having a verb hide them.
 | `v128.S_eq` / `S_gt_s` | `i8x16 i16x8 i32x4` | `v128, v128` | `v128` mask |
 | `v128.S_shl` / `S_shr_u` | `i16x8 i32x4 i64x2` | `v128, i32` | `v128` |
 | `v128.S_shr_s` | `i16x8 i32x4` | `v128, i32` | `v128` |
+| `v128.S_rotl` | `i32x4 i64x2` | `v128`, literal | `v128` — count modulo the lane width |
 | `v128.i8x16_bitmask` | — | `v128` | `i32` — top bit per lane, lane 0 in bit 0 |
+
+The rotates take a literal count because the instructions that have one --
+Arm's `xar`, AVX-512's `vprold` -- take it so, and ChaCha20's 16, 12, 8 and 7
+and Keccak's offsets are all constants; a rotate by a register is two shifts
+and an `or`, which the caller writes where it means it.
 
 There is no `i64x2_shr_s` and no `i64x2_eq`: neither is a baseline
 instruction, and a verb that lowered to a sequence would hide the cost from
@@ -821,14 +852,172 @@ the one caller who cares about it.
 | `v128.S_unpack_low` / `_unpack_high` | `i8x16 i16x8 i32x4 i64x2` | `v128, v128` | `v128` |
 | `v128.i8x16_narrow_s` / `_u` | — | `v128, v128` of `i16x8` | `v128` — saturating |
 | `v128.i16x8_narrow_s` | — | `v128, v128` of `i32x4` | `v128` — saturating |
+| `v128.i8x16_swizzle` | — | `v128 table, v128 index` | `v128` — byte `i` is `table[index[i]]`, zero where `index[i] ≥ 16` |
+| `v128.S_bswap` | `i16x8 i32x4 i64x2` | `v128` | `v128` — each lane's bytes reversed |
 
 Unpacking interleaves the named half of each operand, the first operand's lane
 first. Widening a vector is unpacking it against zero; duplicating a lane is
 unpacking it against itself. Narrowing is the other direction and saturates.
 
+`i8x16_swizzle` is the variable byte permute, and the one row here whose
+pattern is a register. Its out-of-range rule is the union of the targets':
+Arm's `tbl` zeroes an index past the table and SSSE3's `pshufb` zeroes one
+with its top bit set, so an index of 16 or more is zero on both, at the cost
+of one saturating add on x86-64. The `bswap` rows are the big-endian lane
+load every hash in §V5 starts its block with; they are a `swizzle` against a
+constant, named because every target has a cheaper spelling of it.
+
 The lane index and shuffle pattern are literals because the instructions'
 are. A variable index is a store and a scalar load, which the frontend writes
 where it means it.
+
+### V5. Cryptography
+
+These rows name the cryptographic instructions both CPU architectures in scope
+have, once each, with one definition. Where the two disagree about how a step
+is cut — AES is a whole round on x86-64 and half of one on AArch64; SHA-256
+keeps the state in the algorithm's order on one and as ABEF/CDGH on the
+other — the verb takes the shape that is the algorithm's own, and the
+lowering for the other target pays for the difference. Each group is a
+capability of §P; §0's availability rule holds here as for `f128`, so a verb
+on a processor without its instruction is a call that computes the same
+answer, in time that does not depend on its operands.
+
+**AES.** The state and the round key are sixteen bytes in FIPS-197's order —
+byte `4c + r` is row `r` of column `c` — which is the order a block is in
+memory and the order both instruction sets hold it in.
+
+| Instruction | Operands | Result |
+| --- | --- | --- |
+| `v128.aes_enc` | `v128 state, v128 key` | `v128` — SubBytes, ShiftRows, MixColumns, then `xor key` |
+| `v128.aes_enc_last` | `v128 state, v128 key` | `v128` — the final round: no MixColumns |
+| `v128.aes_dec` | `v128 state, v128 key` | `v128` — InvShiftRows, InvSubBytes, InvMixColumns, then `xor key` |
+| `v128.aes_dec_last` | `v128 state, v128 key` | `v128` — no InvMixColumns |
+| `v128.aes_inv_mix_columns` | `v128` | `v128` |
+| `v128.aes_keygen_assist` | `v128`, literal `rcon` 0–255 | `v128` — see below |
+
+`aes_dec` is a round of FIPS-197's equivalent inverse cipher, whose round keys
+are the encryption keys in reverse with `aes_inv_mix_columns` applied to all
+but the first and last; that is how the instruction is defined on both
+targets, and decryption in the straightforward order would cost a
+MixColumns per round on both. `aes_keygen_assist` of `x` is the four words
+`SubWord(x₁)`, `RotWord(SubWord(x₁)) ⊕ rcon`, `SubWord(x₃)`,
+`RotWord(SubWord(x₃)) ⊕ rcon`, lane 0 first — AES-NI's `aeskeygenassist`,
+which AArch64 has no instruction for and computes with a short sequence.
+
+**Carry-less multiplication.**
+
+| Instruction | Operands | Result |
+| --- | --- | --- |
+| `v128.i64x2_clmul` | `v128 a, v128 b`, literal 0–3 | `v128` — the 128-bit carry-less product of one lane of each |
+
+Bit 0 of the literal selects `a`'s lane and bit 1 `b`'s: `0` is low by low and
+`3` high by high, which are Arm's `pmull` and `pmull2`; the mixed two are a
+lane move first there. This is GHASH's and every polynomial CRC fold's
+multiply. The capability is `clmul`.
+
+**SHA-1 and SHA-256.** The state and the message schedule are `i32x4` in the
+algorithm's order: lane 0 holds `a` (or `e`, or `W[t]`), lane 3 holds `d` (or
+`h`, or `W[t+3]`). A message block's words are big-endian in memory, so a
+block is loaded and `i32x4_bswap`ped. `wk` is `W[t..t+3]` with the round
+constants `K[t..t+3]` already added, `i32x4_add`ed by the caller from a table
+it keeps.
+
+| Instruction | Operands | Result |
+| --- | --- | --- |
+| `v128.sha1_rounds_ch` | `v128 abcd, i32 e, v128 wk` | `v128` — `abcd` after four rounds of `Ch` |
+| `v128.sha1_rounds_parity` | `v128 abcd, i32 e, v128 wk` | `v128` — four rounds of `Parity` |
+| `v128.sha1_rounds_maj` | `v128 abcd, i32 e, v128 wk` | `v128` — four rounds of `Maj` |
+| `v128.sha1_msg1` | `v128 w0, v128 w4, v128 w8` | `v128` — `W[t..t+3] ⊕ W[t+2..t+5] ⊕ W[t+8..t+11]` |
+| `v128.sha1_msg2` | `v128 x, v128 w12` | `v128` — `W[t+16..t+19]` from `msg1`'s `x` |
+| `v128.sha256_rounds_abcd` | `v128 abcd, v128 efgh, v128 wk` | `v128` — `abcd` after four rounds |
+| `v128.sha256_rounds_efgh` | `v128 efgh, v128 abcd, v128 wk` | `v128` — `efgh` after the same four rounds |
+| `v128.sha256_msg1` | `v128 w0, v128 w4` | `v128` — `W[t..t+3] + σ₀(W[t+1..t+4])` |
+| `v128.sha256_msg2` | `v128 x, v128 w8, v128 w12` | `v128` — `W[t+16..t+19]` from `msg1`'s `x` |
+
+The `e` four SHA-1 rounds need is `i32.rotl` by 30 of the `a` four rounds
+before, which is lane 0 of the `abcd` that went in to them; it is a scalar
+because it is one word, and both targets take it in a register of its own.
+The two SHA-256 round verbs read the same state before the same four rounds
+and each yields its half after them — the instructions are two because a
+result is one register, and a lowering that sees both computes them
+together. `w4` and `w8` stand for the next schedule vectors after `w0`, by
+the index of their first word.
+
+**SHA-512.** SHA-512 is `i64x2`, two words to a register, and its four rows
+are Arm's `SHA512H`, `SHA512H2`, `SHA512SU0` and `SHA512SU1` operand for
+operand — the only instruction set with a 128-bit form of them — so that two
+rounds are `sha512_rounds_1` then `sha512_rounds_2` with the operands that
+architecture's description gives.
+
+| Instruction | Operands | Result |
+| --- | --- | --- |
+| `v128.sha512_rounds_1` | `v128, v128, v128` | `v128` — `SHA512H` |
+| `v128.sha512_rounds_2` | `v128, v128, v128` | `v128` — `SHA512H2` |
+| `v128.sha512_msg1` | `v128, v128` | `v128` — `SHA512SU0` |
+| `v128.sha512_msg2` | `v128, v128, v128` | `v128` — `SHA512SU1` |
+
+SHA-3 has no rows here. Its steps are §V1's `xor3` and `xor_andnot` and §V3's
+`i64x2_rotl`, which are general and have no capability: a verb named for an
+algorithm is one whose instruction is that algorithm's, and Keccak's are
+not.
+
+**SM3 and SM4.** These are Arm's `SM3SS1`, `SM3TT1A`, `SM3TT1B`, `SM3TT2A`,
+`SM3TT2B`, `SM3PARTW1`, `SM3PARTW2`, `SM4E` and `SM4EKEY`, operand for operand;
+x86-64's `vsm4rnds4` and `vsm4key4` compute the same four SM4 rounds and
+keys, and its SM3 instructions cut the hash differently and are not used.
+
+| Instruction | Operands | Result |
+| --- | --- | --- |
+| `v128.sm3_ss1` | `v128, v128, v128` | `v128` |
+| `v128.sm3_tt1a` / `tt1b` / `tt2a` / `tt2b` | `v128, v128, v128`, literal lane 0–3 | `v128` |
+| `v128.sm3_partw1` / `partw2` | `v128, v128, v128` | `v128` |
+| `v128.sm4_rounds` | `v128 state, v128 rk` | `v128` — four rounds, four round keys |
+| `v128.sm4_key` | `v128 rk, v128 ck` | `v128` — the next four round keys |
+
+There is no `aes_mix_columns`, and no eight-bit `pmull`: x86-64 has neither, and
+each is a sequence there that a verb would hide. MixColumns alone is
+`aes_enc` of `aes_dec_last` with zero keys, which is what a lowering would
+write anyway.
+
+## P. Processor Capabilities
+
+A capability names one group of §A8 and §V5 rows by what it computes, not by
+any vendor's feature bit, so that a module says the same thing on every
+target:
+
+| Capability | Rows | x86-64 | AArch64 |
+| --- | --- | --- | --- |
+| `aes` | the AES rows | `aes` | `aes` |
+| `clmul` | `i64x2_clmul` | `pclmulqdq` | `aes` (`pmull`) |
+| `sha1` | the SHA-1 rows | `sha` | `sha2` |
+| `sha256` | the SHA-256 rows | `sha` | `sha2` |
+| `sha512` | the SHA-512 rows | — | `sha3` |
+| `sm3` | the SM3 rows | — | `sm4` |
+| `sm4` | the SM4 rows | `sm4` | `sm4` |
+| `crc32` | the `crc32` rows | — | `crc` |
+| `crc32c` | the `crc32c` rows | `sse4.2` | `crc` |
+
+| Instruction | Operands | Result |
+| --- | --- | --- |
+| `i1.cpu_has` | capability literal | `i1` — whether the processor running this has it |
+
+A function placement states the other half (§6 of the grammar):
+`requires (aes, clmul)` on a function lets its body use those capabilities'
+instructions directly, whatever the module's baseline is. That is how a
+library ships one binary with both paths — the hardware one `requires` its
+capabilities, the portable one does not, and the caller picks with
+`i1.cpu_has` — and it is the only way to have the hardware path on a target
+whose baseline lacks it, since there every verb outside such a function is a
+call. Calling a `requires` function on a processor without what it requires
+executes an instruction the processor does not have, which is that
+processor's illegal-instruction trap: defined, as `trap` is, and never a
+wrong answer.
+
+`i1.cpu_has` of a capability the module's baseline includes is `1` and folds;
+otherwise it is answered by the runtime, which asks the processor the first
+time (`cpuid`, `getauxval`, `sysctl`) and answers from what it said after. A
+capability is `0` on a target whose column is `—`.
 
 ## W. Work-items
 
@@ -987,7 +1176,29 @@ not show it.
 **A general constant expression grammar in initializers.** `reloc` admits what
 relocation records admit and no more.
 
+**A hardware random number verb.** `rdrand` and Arm's `rndr` both answer a value
+and whether it is one, and a result is one register; a verb that hid the
+retry would hide the one fact a caller of it needs. It is inline assembly,
+or the operating system's generator, which every one in scope has.
+
+**Wider cryptographic vectors.** `vaesenc` on `ymm` and `zmm`, and
+`vpclmulqdq` likewise, are §V5's rows at §K's `v256` and `v512`, and arrive
+with those register types.
+
 ### Changes from the previous revision
+
+| § | change |
+| --- | --- |
+| head | §P added to the section list |
+| A8 | new: `crc32` and `crc32c` |
+| V4 | `i8x16_swizzle`; `i16x8_bswap`, `i32x4_bswap`, `i64x2_bswap` |
+| V1 | `xor3`, `xor_andnot` |
+| V3 | `i32x4_rotl`, `i64x2_rotl` |
+| V5 | new: AES, carry-less multiplication, SHA-1, SHA-256, SHA-512, SM3, SM4 |
+| P | new: capabilities, `i1.cpu_has`, and the `requires` placement |
+| L | hardware random numbers; wider cryptographic vectors |
+
+### Changes from the revision before that
 
 | § | change |
 | --- | --- |
@@ -997,14 +1208,14 @@ relocation records admit and no more.
 | D | `f16` / `bf16` `load` and `store` |
 | K | half floats struck (landed); packed half arithmetic and narrow storage floats added |
 
-### Changes from the revision before that
+### Changes from the revision two before that
 
 | § | change |
 | --- | --- |
 | G2 | `tail_call` and `tail_callind`, terminators; their contract stated |
 | K | tail calls struck (landed as terminators rather than a modifier) |
 
-### Changes from the revision two before that
+### Changes from the revision three before that
 
 | § | change |
 | --- | --- |
@@ -1016,7 +1227,7 @@ relocation records admit and no more.
 | K | atomic min/max and named scopes struck (landed); half floats, dynamic workgroup storage, address-space attributes added |
 | L | float atomic min/max, pointer address spaces |
 
-### Changes from the revision three before that
+### Changes from the revision four before that
 
 | § | change |
 | --- | --- |

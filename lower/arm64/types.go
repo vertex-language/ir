@@ -15,6 +15,7 @@ const (
 	w64
 	wf32
 	wf64
+	wv128 // §V's v128: a whole Q register
 )
 
 // isFloat reports whether the width names a value in a vector register.
@@ -44,6 +45,8 @@ func widthOf(t ir.RegType) (width, bool) {
 		return wf32, true
 	case ir.TypeF64:
 		return wf64, true
+	case ir.TypeV128:
+		return wv128, true
 	}
 	return 0, false
 }
@@ -243,6 +246,16 @@ type (
 		w   width
 	}
 
+	// logicImmOp is AND, ORR or EOR with a literal, where the literal is
+	// a logical immediate (a rotated run of ones, replicated): the
+	// peephole pass makes one wherever a constant's only reader is such
+	// an and, or or xor -- every mask and every single bit.
+	logicImmOp struct {
+		verb ir.Verb // VAnd, VOr or VXor
+		imm  uint64
+		w    width
+	}
+
 	// shiftImmOp is LSL, LSR or ASR by a literal amount, which is what a
 	// shift by a constant and a multiply by a power of two both are.
 	shiftImmOp struct {
@@ -325,10 +338,12 @@ type (
 	spillOp struct {
 		off   int64
 		float bool
+		wide  bool // all of a Q register: a v128
 	}
 	reloadOp struct {
 		off   int64
 		float bool
+		wide  bool
 	}
 
 	// siteOp is one end of an invoke's call-site bracket: a mark that

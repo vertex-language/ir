@@ -45,6 +45,13 @@ func iselInst(c *cursor, vr *vregs, fr *frame, in *ir.Inst, opts Options) error 
 	op := in.Op()
 	verb := op.Verb
 
+	// §V and the cryptographic verbs first: v128.and is binOps' verb in
+	// another namespace.
+	feat := opts.features().Plus(featuresOf(c.fn.RequiresAttr())...)
+	if handled, err := iselVec(c, vr, in, feat); handled {
+		return err
+	}
+
 	if binOps[verb] && !op.Type.IsFloat() {
 		return iselBinary(c, vr, in)
 	}

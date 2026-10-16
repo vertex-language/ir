@@ -107,9 +107,13 @@ func Func(f *ir.Func, opts Options) error {
 		}
 		if choosing {
 			if len(callee.Blocks()) == 0 || callee == f || onChain(s.chain, callee) || len(s.chain) >= depth ||
-				!plain(callee) || !closed(s.in, callee) || !opts.Should(f, callee) {
+				!plain(callee) || !closed(s.in, callee) || !wider(f, callee) || !opts.Should(f, callee) {
 				continue
 			}
+		}
+		if !wider(f, callee) {
+			return fmt.Errorf("inline: @%s requires (%s), which @%s does not", callee.Name(),
+				callee.RequiresAttr()&^f.RequiresAttr(), f.Name())
 		}
 		if callee == f {
 			return fmt.Errorf("inline: @%s calls itself", f.Name())
@@ -132,6 +136,14 @@ func Func(f *ir.Func, opts Options) error {
 		}
 	}
 	return f.Module().Err()
+}
+
+// wider reports whether caller may execute everything callee may: a
+// callee that requires a capability (§P) its caller does not is the
+// hardware path of a choice the caller makes with i1.cpu_has, and copied
+// into the caller its instructions would run before the choice is made.
+func wider(caller, callee *ir.Func) bool {
+	return callee.RequiresAttr()&^caller.RequiresAttr() == 0
 }
 
 // closed reports whether call's callee can be copied whole: every

@@ -15,8 +15,11 @@ import (
 // fact about text the frontend wrote, and it has to reach the caller with the
 // position the assembler gave it rather than becoming a sticky module error
 // with a section offset for a location.
+//
+// bp says which conditional branches are written long; nil writes every one
+// short. See relax.go.
 func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func,
-	assigned map[mir.VReg]regalloc.PhysReg, fr *frame, sv saves, plan *ehPlan) error {
+	assigned map[mir.VReg]regalloc.PhysReg, fr *frame, sv saves, plan *ehPlan, bp *branchPlan) error {
 
 	x := func(v mir.VReg) reg.X { return reg.X(assigned[v]) }
 	w := func(v mir.VReg) reg.W { return reg.W(assigned[v]) }
@@ -55,6 +58,7 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 		default:
 			text.Label(mb.Label)
 		}
+		bp.block(text, mb.Label)
 
 		for _, in := range mb.Instrs {
 			switch op := in.Op.(type) {
@@ -64,6 +68,8 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 					break
 				}
 				switch {
+				case op.w == wv128:
+					text.OrrV16B(vreg(dst), vreg(src), vreg(src))
 				case op.w == wf32:
 					text.FmovS(s(dst), s(src))
 				case op.w == wf64:
@@ -135,15 +141,23 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 				// unconditional one -- unless the block emitted next is
 				// one of the two arms, in which case that arm is reached
 				// by falling through and the branch to it is not written.
-				// B.cond reaches ±1MB and B reaches ±128MB; a function
-				// past the shorter is not one this package has met.
+				// B.cond reaches ±1MB and B ±128MB; bp says which
+				// branches are past the shorter.
+				bcond := func(c condCode) func(bool, string) {
+					return func(invert bool, label string) {
+						if invert {
+							c = c.inverse()
+						}
+						text.BCond(cond(c), arm64asm.Label(label))
+					}
+				}
 				switch {
 				case op.els == next:
-					text.BCond(cond(op.cond), arm64asm.Label(op.then))
+					bp.cond(text, fn, op.then, bcond(op.cond))
 				case op.then == next:
-					text.BCond(cond(op.cond.inverse()), arm64asm.Label(op.els))
+					bp.cond(text, fn, op.els, bcond(op.cond.inverse()))
 				default:
-					text.BCond(cond(op.cond), arm64asm.Label(op.then))
+					bp.cond(text, fn, op.then, bcond(op.cond))
 					text.B(arm64asm.Label(op.els))
 				}
 
@@ -194,6 +208,9 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 			case shiftImmOp:
 				emitShiftImm(text, op, in, x, w)
 
+			case logicImmOp:
+				emitLogicImm(text, op, in, x, w)
+
 			case siteOp:
 				// Nothing is emitted: the mark is the offset itself,
 				// which is what an invoke's call-site entry names.
@@ -229,8 +246,15 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 				}
 				emitFrameLoad(text, op.w, fr.local(op.off), in, x, w, d, s)
 
+			case vecOp:
+				emitVec(text, op, in, assigned)
+
 			case spillOp:
 				b, o := frameBase(text, fr.local(op.off))
+				if op.wide {
+					text.SturImmQ(reg.Q(assigned[in.Uses[0]]), arm64asm.Mem128(b).Off(o))
+					break
+				}
 				if op.float {
 					text.SturImmD(d(in.Uses[0]), arm64asm.Mem64(b).Off(o))
 					break
@@ -239,6 +263,10 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 
 			case reloadOp:
 				b, o := frameBase(text, fr.local(op.off))
+				if op.wide {
+					text.LdurImmQ(reg.Q(assigned[in.Defs[0]]), arm64asm.Mem128(b).Off(o))
+					break
+				}
 				if op.float {
 					text.LdurImmD(d(in.Defs[0]), arm64asm.Mem64(b).Off(o))
 					break
@@ -386,13 +414,23 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 			case cbnzOp:
 				// The same pair bcondOp emits, with the same arm left
 				// to fall through when it is the block emitted next.
+				r := w(in.Uses[0])
+				cbz := func(zero bool) func(bool, string) {
+					return func(invert bool, label string) {
+						if zero != invert {
+							text.Cbz32(r, arm64asm.Label(label))
+							return
+						}
+						text.Cbnz32(r, arm64asm.Label(label))
+					}
+				}
 				switch {
 				case op.els == next:
-					text.Cbnz32(w(in.Uses[0]), arm64asm.Label(op.then))
+					bp.cond(text, fn, op.then, cbz(false))
 				case op.then == next:
-					text.Cbz32(w(in.Uses[0]), arm64asm.Label(op.els))
+					bp.cond(text, fn, op.els, cbz(true))
 				default:
-					text.Cbnz32(w(in.Uses[0]), arm64asm.Label(op.then))
+					bp.cond(text, fn, op.then, cbz(false))
 					text.B(arm64asm.Label(op.els))
 				}
 
@@ -415,7 +453,7 @@ func emit(am *arm64asm.Module, text *arm64asm.Section, fn *ir.Func, mf *mir.Func
 					arm64asm.PageOff(arm64asm.Ref(op.label, arm64asm.RefAddAbsLo12)))
 
 			case brTableOp:
-				emitBrTable(text, op, in, x, w)
+				emitBrTable(text, fn, bp, op, in, x, w)
 				tables = append(tables, op)
 
 			case symAddrOp:
@@ -876,6 +914,8 @@ func emitLoad(text *arm64asm.Section, op loadOp, in mir.Instr,
 		return
 	}
 	switch op.w {
+	case wv128:
+		emitLoadQ(text, reg.Q(d(dst)), base, op.off)
 	case wf32:
 		text.LdrImmS(s(dst), arm64asm.Mem32(base).Off(op.off))
 	case wf64:
@@ -902,6 +942,8 @@ func emitStore(text *arm64asm.Section, op storeOp, in mir.Instr,
 		return
 	}
 	switch op.w {
+	case wv128:
+		emitStoreQ(text, reg.Q(d(v)), base, op.off)
 	case wf32:
 		text.StrImmS(s(v), arm64asm.Mem32(base).Off(op.off))
 	case wf64:
@@ -1045,6 +1087,32 @@ func emitShiftImm(text *arm64asm.Section, op shiftImmOp, in mir.Instr,
 	}
 }
 
+// emitLogicImm is AND, ORR or EOR with a logical immediate.
+func emitLogicImm(text *arm64asm.Section, op logicImmOp, in mir.Instr,
+	x func(mir.VReg) reg.X, w func(mir.VReg) reg.W) {
+
+	dst, src := in.Defs[0], in.Uses[0]
+	if op.w == w32 {
+		switch op.verb {
+		case ir.VAnd:
+			text.AndImm32(w(dst), w(src), uint32(op.imm))
+		case ir.VOr:
+			text.OrrImm32(w(dst), w(src), uint32(op.imm))
+		default:
+			text.EorImm32(w(dst), w(src), uint32(op.imm))
+		}
+		return
+	}
+	switch op.verb {
+	case ir.VAnd:
+		text.AndImm64(x(dst), x(src), op.imm)
+	case ir.VOr:
+		text.OrrImm64(x(dst), x(src), op.imm)
+	default:
+		text.EorImm64(x(dst), x(src), op.imm)
+	}
+}
+
 // emitBrTable is the range check, the table lookup and the jump.
 //
 // Each entry is the distance from the table's own start to a block, not the
@@ -1056,7 +1124,7 @@ func emitShiftImm(text *arm64asm.Section, op shiftImmOp, in mir.Instr,
 //
 // The selector indexes at the full 64-bit width, which is safe because a write
 // to a W register zeroes the upper half and the compare has bounded the lower.
-func emitBrTable(text *arm64asm.Section, op brTableOp, in mir.Instr,
+func emitBrTable(text *arm64asm.Section, fn *ir.Func, bp *branchPlan, op brTableOp, in mir.Instr,
 	x func(mir.VReg) reg.X, w func(mir.VReg) reg.W) {
 
 	sel := in.Uses[0]
@@ -1065,7 +1133,13 @@ func emitBrTable(text *arm64asm.Section, op brTableOp, in mir.Instr,
 	// One unsigned compare for both ends of the range: a negative selector
 	// read as unsigned is a very large one, so HS catches it too.
 	text.SubsImm32(reg.WZR, w(sel), int64(len(op.targets)))
-	text.BCond(arm64asm.HS, arm64asm.Label(op.dflt))
+	bp.cond(text, fn, op.dflt, func(invert bool, label string) {
+		c := arm64asm.HS
+		if invert {
+			c = arm64asm.LO
+		}
+		text.BCond(c, arm64asm.Label(label))
+	})
 
 	text.Adrp(base, arm64asm.Ref(op.id, arm64asm.RefAdrPage21))
 	text.AddImm64(base, base, arm64asm.PageOff(arm64asm.Ref(op.id, arm64asm.RefAddAbsLo12)))
@@ -1150,6 +1224,8 @@ func emitFrameLoad(text *arm64asm.Section, wd width, off int64, in mir.Instr,
 
 	b, o := frameBase(text, off)
 	switch wd {
+	case wv128:
+		text.LdurImmQ(reg.Q(d(in.Defs[0])), arm64asm.Mem128(b).Off(o))
 	case wf32:
 		text.LdurImmS(s(in.Defs[0]), arm64asm.Mem32(b).Off(o))
 	case wf64:
@@ -1167,6 +1243,8 @@ func emitFrameStore(text *arm64asm.Section, wd width, off int64, in mir.Instr,
 
 	b, o := frameBase(text, off)
 	switch wd {
+	case wv128:
+		text.SturImmQ(reg.Q(d(in.Uses[0])), arm64asm.Mem128(b).Off(o))
 	case wf32:
 		text.SturImmS(s(in.Uses[0]), arm64asm.Mem32(b).Off(o))
 	case wf64:
@@ -1187,6 +1265,8 @@ func emitLoadAt(text *arm64asm.Section, op loadAtOp, in mir.Instr,
 
 	base := x(in.Uses[0])
 	switch op.w {
+	case wv128:
+		emitLoadQ(text, reg.Q(d(in.Defs[0])), base, op.off)
 	case wf32:
 		text.LdrImmS(s(in.Defs[0]), arm64asm.Mem32(base).Off(op.off))
 	case wf64:
@@ -1206,6 +1286,8 @@ func emitStoreAt(text *arm64asm.Section, op storeAtOp, in mir.Instr,
 
 	base := x(in.Uses[1])
 	switch op.w {
+	case wv128:
+		emitStoreQ(text, reg.Q(d(in.Uses[0])), base, op.off)
 	case wf32:
 		text.StrImmS(s(in.Uses[0]), arm64asm.Mem32(base).Off(op.off))
 	case wf64:
@@ -1531,6 +1613,10 @@ func emitArgStore(text *arm64asm.Section, op argStoreOp, in mir.Instr,
 		return
 	}
 	switch op.w {
+	case wv128:
+		// An outgoing stack argument: AAPCS64 gives a vector a 16-byte
+		// aligned slot, so the scaled form always holds the offset.
+		text.StrImmQ(reg.Q(d(in.Uses[0])), arm64asm.Mem128(reg.SP).Off(op.off))
 	case wf32:
 		text.StrImmS(s(in.Uses[0]), arm64asm.Mem32(reg.SP).Off(op.off))
 	case wf64:
@@ -1565,4 +1651,37 @@ func emitNarrowFrameLoad(text *arm64asm.Section, op frameLoadOp, off int64, in m
 	default:
 		text.LdrhImm(dst, arm64asm.Mem16(b).Off(o))
 	}
+}
+
+// emitLoadQ and emitStoreQ are a Q register's access at base+off: the scaled
+// form where the offset is a multiple of sixteen it can hold, LDUR's signed
+// nine bits where not, and the address computed in X16 past both.
+func emitLoadQ(text *arm64asm.Section, q reg.Q, base reg.X, off int64) {
+	switch {
+	case fitsOffset(off, 16):
+		text.LdrImmQ(q, arm64asm.Mem128(base).Off(off))
+	case off >= -256 && off <= 255:
+		text.LdurImmQ(q, arm64asm.Mem128(base).Off(off))
+	default:
+		emitAddress(text, base, off)
+		text.LdrImmQ(q, arm64asm.Mem128(reg.X16))
+	}
+}
+
+func emitStoreQ(text *arm64asm.Section, q reg.Q, base reg.X, off int64) {
+	switch {
+	case fitsOffset(off, 16):
+		text.StrImmQ(q, arm64asm.Mem128(base).Off(off))
+	case off >= -256 && off <= 255:
+		text.SturImmQ(q, arm64asm.Mem128(base).Off(off))
+	default:
+		emitAddress(text, base, off)
+		text.StrImmQ(q, arm64asm.Mem128(reg.X16))
+	}
+}
+
+// emitAddress is base+off in X16, for an offset no access form holds.
+func emitAddress(text *arm64asm.Section, base reg.X, off int64) {
+	text.MovWide64(reg.X16, uint64(off))
+	text.AddShifted64(reg.X16, base, reg.X16)
 }
