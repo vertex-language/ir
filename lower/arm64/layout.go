@@ -48,6 +48,11 @@ func scalarSizeAlign(s ir.StoreType) (uint64, uint64, error) {
 		return 4, 4, nil
 	case ir.StoreI64, ir.StoreF64, ir.StorePtr:
 		return 8, 8, nil
+	case ir.StoreI128:
+		// __int128's storage: the legalizer splits its values into
+		// i64 pairs, but a global or a field of one still takes
+		// sixteen bytes at sixteen, as both psABIs lay it out.
+		return 16, 16, nil
 	case ir.StoreF128:
 		return 16, 16, nil
 	case ir.StoreF80:

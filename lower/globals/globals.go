@@ -542,6 +542,11 @@ func emitScalar(sec Section, g *ir.Global, size, v uint64) error {
 		sec.Long(uint32(v))
 	case 8:
 		sec.Quad(v)
+	case 16:
+		// An i128 from a 64-bit literal, sign-extended: the low
+		// half first, as every target here is little-endian.
+		sec.Quad(v)
+		sec.Quad(uint64(int64(v) >> 63))
 	default:
 		return fmt.Errorf("lower: @%s: no %d-byte scalar initializer", g.Name(), size)
 	}
