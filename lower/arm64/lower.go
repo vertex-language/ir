@@ -178,7 +178,13 @@ func Lower(m *ir.Module, opts Options) (*arm64obj.Object, error) {
 	for _, f := range m.Funcs() {
 		asmFeatures = asmFeatures.Plus(featuresOf(f.RequiresAttr())...)
 	}
-	am := arm64asm.NewModule(arm64asm.WithFeatures(asmFeatures))
+	amOpts := []arm64asm.Option{arm64asm.WithFeatures(asmFeatures)}
+	if opts.darwin() {
+		// Mach-O objects are cut at their symbols (MH_SUBSECTIONS_VIA_SYMBOLS)
+		// and dead-stripped atom by atom.
+		amOpts = append(amOpts, arm64asm.WithAtoms())
+	}
+	am := arm64asm.NewModule(amOpts...)
 
 	// A weak import is a reference the link may leave unresolved.
 	for _, f := range m.FuncImports() {
