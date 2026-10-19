@@ -1,36 +1,7 @@
 // Package regalloc assigns mir.VRegs to physical registers.
 //
-// It works from an interference graph: two vregs interfere when one is
-// live at a point where the other is written, and vregs that never
-// interfere can share a register. That is the whole of what makes a
-// function with more temporaries than the machine has registers
-// compilable at all — before liveness, every vreg a function named owned
-// a register for the function's entire lifetime, and nine temporaries
-// was the ceiling.
-//
-// It is still not a full allocator, but it no longer refuses work it
-// cannot colour outright: given a Spiller, a graph that needs more
-// colours than the pool has is rewritten so that some value lives in
-// memory, and coloured again. See spill.go, which also says what makes
-// that strategy simple and what makes it bad. Without a Spiller, or when
-// no value is left that may be spilled, it is still ErrOutOfRegisters,
-// loudly, rather than two live vregs silently sharing one register.
-//
-// It colours more than one register file. A Class is a set of physical
-// registers disjoint from every other class's, and a vreg in one never
-// shares a register with a vreg in another — which is a fact about the
-// free lists and about nothing else here. The interference graph is
-// built without classes and does not need them: two vregs of different
-// classes may well be live at once, and the edge between them is real
-// and simply never binding, because the registers they are competing
-// for are not the same registers. A target with one register file never
-// mentions classes at all.
-//
-// The colouring is greedy in vreg order and not optimal. Optimal graph
-// colouring is NP-hard, greedy is what production allocators use too, and
-// the useful property is not optimality but determinism: the same MIR
-// always produces the same assignment, which is what makes a compiler's
-// output diffable and its tests writable.
+// It supports graph colouring with spilling (spill everywhere) as well as linear scan.
+// Physical registers can be partitioned into disjoint register classes (e.g. GPR vs FPR/vector).
 package regalloc
 
 import (
@@ -59,21 +30,8 @@ var ErrOutOfRegisters = fmt.Errorf("regalloc: out of physical registers")
 var ErrPinConflict = fmt.Errorf("regalloc: two live vregs are pinned to one register")
 
 // A Class is a register file: a set of physical registers disjoint from
-// every other class's, holding values that cannot live in each other's
-// registers. An integer and a floating-point file are two classes on
-// most architectures and one class on some.
-//
-// regalloc needs to know only that a vreg in one class never shares a
-// register with a vreg in another, which is why classes touch the free
-// lists and nothing else. The interference graph is built without them:
-// two vregs of different classes may well be live at once, and the edge
-// between them is real and simply never binding, because the registers
-// they are competing for are not the same registers.
-//
-// It is also why a PhysReg means nothing without its class. RAX and XMM0
-// are both register number zero, and a target that had to renumber one
-// of them to keep them apart would be working around this package rather
-// than using it.
+// other classes (e.g. integer vs floating-point/vector registers).
+// A PhysReg is interpreted in the context of its Class.
 type Class int
 
 // DefaultClass is the class of every vreg a target does not Classify. It
@@ -485,30 +443,9 @@ func interference(f *mir.Func) *graph {
 		})
 	}
 
-	// Values live simultaneously across a block boundary interfere even
-	// when no single instruction writes either: two parameters both live
-	// into the same block have to be in two registers.
-	//
-	// Only the ones no instruction writes, though, and that is the whole
-	// of the difference between this loop costing nothing and costing more
-	// than everything else here put together.
-	//
-	// Take two values live at the same point, each of them written
-	// somewhere. Whichever is written second is written while the other is
-	// live — so the rule above has already drawn the edge, at that write.
-	// (And if the first is written again in between, that write is itself
-	// a point where the other is live, so the edge is drawn there.) A
-	// value with no write anywhere is the case that argument does not
-	// reach: a parameter arrives live and is never written, so two of them
-	// are never simultaneously anything's live-after, and nothing but this
-	// loop would separate them.
-	//
-	// So the pairs worth walking are the ones among values with no write,
-	// which is a handful rather than the whole live set. Walking the whole
-	// set is the same edges over again: a block whose live set holds a
-	// hundred and thirty values is eight thousand pairs, five hundred
-	// blocks of that is millions, and it is the same millions each time
-	// because the set barely changes from block to block.
+	// Values live simultaneously across a block boundary without definitions in f
+	// (such as incoming function parameters) must interfere. Defined values are
+	// already connected by the per-instruction live-after walk above.
 	defless := deflessLive(f, live)
 	for _, b := range f.Blocks {
 		overlap(g, defless, live.In[b])

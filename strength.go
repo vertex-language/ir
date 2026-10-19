@@ -1,25 +1,13 @@
 package ir
 
-// Strength reduction of division, remainder and multiplication by a power
-// of two.
-//
-// A CPU backend selects shifts for these itself. Apple's GPU compiler,
-// reading AIR, does not: an i64 sdiv by 2 is its 64-bit division routine,
-// paid every time it runs -- in a kernel's index arithmetic, in the loop
-// a wave reduction halves its stride by. ReducePowersOfTwo rewrites them
-// before the AIR is written:
+// ReducePowersOfTwo rewrites integer division, remainder, and multiplication by powers of two:
 //
 //	udiv x, 2^k  ->  ushr x, k          urem x, 2^k  ->  and x, 2^k-1
 //	mul  x, 2^k  ->  shl x, k
-//	sdiv x, 2^k  ->  sshr x, k          when x is known not negative,
+//	sdiv x, 2^k  ->  sshr x, k          when x is known non-negative,
 //	                 sshr (x + (sshr x, w-1 ushr w-k)), k  otherwise
-//	srem x, 2^k  ->  and x, 2^k-1       when x is known not negative,
+//	srem x, 2^k  ->  and x, 2^k-1       when x is known non-negative,
 //	                 x - shl (sdiv x, 2^k), k  otherwise
-//
-// A value is known not negative when its bits are bounded below its width:
-// a zero-extension, a constant, and the arithmetic of such values whose
-// bound stays under the width (bitBound). A division by a non-zero
-// constant cannot trap, so nothing is lost by the rewrite.
 
 // ReducePowersOfTwo rewrites f's integer division, remainder and
 // multiplication by powers of two, and reports how many it rewrote.

@@ -142,18 +142,8 @@ func (b *Block) Sel() I32 {
 	return I32{b.params[1]}
 }
 
-// newBlock allocates and registers a block, or — once the module has already
-// failed — hands back an inert stand-in so a frontend already mid-walk has
-// something to keep calling into.
-//
-// Even the stand-in gets Builder.init: every builder method funnels through
-// Builder.mod, which dereferences blk.fn.m before anything else runs, and a
-// zero-value Builder's namespaces (I32NS{}, PtrNS{}, ...) hold a nil *Builder.
-// A method call on that nil receiver panics before it ever reaches the
-// m.err != nil checks that are supposed to make post-failure calls no-ops.
-// Initializing the stand-in costs nothing — it just makes it point back at
-// the same already-failed module — and is what actually makes "every call
-// after a failure is a no-op" true instead of aspirational.
+// newBlock allocates and registers a block. On sticky module failure, it returns
+// an inert initialized block so subsequent builder calls remain safe no-ops.
 func (f *Func) newBlock(label string) *Block {
 	if f.m.err != nil && f.entry != nil {
 		b := &Block{fn: f, label: label}

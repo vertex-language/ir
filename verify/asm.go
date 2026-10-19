@@ -1,27 +1,8 @@
 package verify
 
-// §8b's constraint list.
-//
-// Nothing here reads the template. §8b puts that at the backend that
-// assembles it, which is the only layer that knows what `%w0` means or
-// which letter is a register class on this target, and this file keeps to
-// what is true of an operand list on every target at once.
-//
-// Three things are. A constraint that is the empty string names nothing —
-// not a class, not a tie, not a target letter — and there is no reading of
-// it under which the operand has a place to live. An output constrained
-// `imm` asks the assembler to write to a literal. And a matching
-// constraint is a number into the output list, so a number past its end is
-// the one arity fault §8b keeps at this layer: every backend reads a tie
-// with ir.Constraint.Tied and then has to do something with an index that
-// is out of range, and the only honest something is to refuse the module
-// before a backend has to guess.
-//
-// That last one is why this rule exists at all. An out-of-range tie is not
-// a crash anywhere: each backend falls back to treating the input as an
-// ordinary operand in a register of its own, the template's %1 then names
-// a register the author did not mean, and the object is wrong with no
-// diagnostic. GCC rejects the same constraint outright.
+// Package verify checks §8b inline assembly constraint lists: constraints cannot
+// be empty, outputs cannot be constrained to literals (imm), and matching constraint
+// indices must refer to valid outputs.
 
 import (
 	"fmt"
@@ -108,18 +89,8 @@ func plural(n int) string {
 	return fmt.Sprintf("are %d outputs", n)
 }
 
-// asmGotoTargets is §19.16 for the terminator form.
-//
-// An asm goto's outputs are the trailing parameters of its fallthrough
-// target, which is invoke's rule applied to the same shape: the instruction
-// defines no register of its own, because one would have to dominate the
-// edges the assembled text branches along, and on those the text did not
-// reach the end that writes it. The fallthrough edge is the one on which it
-// did.
-//
-// So the target's parameter list is the edge's arguments followed by one
-// parameter per output, and the target is reached by that edge alone —
-// another predecessor would arrive with the outputs unset.
+// asmGotoTargets checks §19.16 for asm goto: outputs appear as trailing parameters
+// on the single-predecessor fallthrough target block.
 func (c *checker) asmGotoTargets(blocks []*ir.Block) {
 	edges := edgeCounts(blocks)
 

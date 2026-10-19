@@ -1,39 +1,11 @@
 package amdgpu
 
-// Divergent control flow: the whole wave takes one path, so a branch
-// whose condition differs across lanes cannot be a branch. What it can
-// be is a mask. Every block gets a predicate — a lane mask saying which
-// lanes want to execute it next — and the blocks are laid out in one
-// linear order, each behind a flow block that narrows exec to the lanes
-// whose predicate is set and skips the block when none is. A block's
-// terminator no longer branches: it sets its successors' predicates for
-// the lanes that reached it, and falls through to the next flow. A loop
-// is the same, with its header's flow entered again from the end of the
-// body and left when no lane's predicate remains.
+// Divergent control flow: branches whose conditions differ across wave lanes are
+// structurized into predicate lane masks controlling the hardware execution mask (exec).
 //
-// This is LLVM's StructurizeCFG followed by SILowerControlFlow, done on
-// MIR rather than on the IR, which is what makes it small: block
-// parameters are already copies in edge blocks, so the only values the
-// pass invents are the predicates. What it needs from the CFG is
-// reducibility — every loop has one header, every entry to it goes
-// through that header — and it refuses the rest by name.
-//
-// # The invariants the lowering rests on
-//
-// A VGPR keeps its value in a lane that is not active: a value defined
-// in a block executes only in that block's lanes, and every later use is
-// by one of those lanes. So no merge is ever needed for a vector value;
-// a def in a skipped block simply does not happen. The allocator does
-// not know that, and would carry a value live-in from the function's
-// entry along the skip path, so each guard defines the block's outgoing
-// values with an undefOp that emits nothing.
-//
-// An SGPR pair does not: a scalar write is all sixty-four bits at once.
-// So every mask that must survive a region another lane executes — a
-// predicate, an i1 block parameter — is written read-modify-write under
-// exec, which is also what keeps it live through the region in the
-// allocator's eyes. A mask defined and consumed on one path is written
-// plainly, since the bits of other lanes are never read.
+// Blocks are linearized behind flow guards that narrow exec to active lanes.
+// Requires a reducible CFG. Vector values (VGPRs) are preserved in inactive lanes,
+// while scalar masks (SGPR pairs) are updated via read-modify-write under exec.
 
 import (
 	"fmt"

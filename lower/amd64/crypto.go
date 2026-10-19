@@ -1,25 +1,8 @@
 package amd64
 
-// §V5's and §A8's cryptographic verbs on AES-NI, PCLMULQDQ, SHA and SSE4.2,
-// and the §V verbs whose instruction is past SSE2 -- the byte swaps, the
-// swizzle and the 8-bit lane rotates on SSSE3's PSHUFB -- or is a short
-// sequence on every x86-64 -- xor3, xor_andnot and the other rotates.
-//
-// The cryptographic verbs reach this file only where the function may
-// execute them: LegalizeCryptoOn made the rest calls before selection. Its
-// capabilities are the ones x86-64 has an instruction for; there is no
-// CRC-32 (IEEE), SHA-512 or SM3 instruction, and SM4's is VEX, so those
-// stay calls even in a function that requires them, and cpu_has of one is
-// 0. The byte swaps and the swizzle reach it only where the function has
-// SSSE3; ExpandVectorVerbs rewrote them otherwise. Which features a
-// function has is funcFeatures: the module's, and what its requires imply.
-//
-// The MIR op is one shape for all of them, as on arm64: an emitter given
-// the registers allocation chose, Defs first then Uses. The allocator never
-// puts a definition in an operand's register, so an emitter may write its
-// destinations -- every one of which is a Def, scratch registers included --
-// before it has read the last operand. SHA256RNDS2 reads XMM0 whatever its
-// encoding says, so its third operand is a vreg pinned there.
+// §V5 cryptographic and §A8 checksum instructions lowered to AES-NI, PCLMULQDQ,
+// SHA extensions, and SSE4.2 (CRC-32C).
+// Unsupported hardware capabilities are legalized into runtime helper calls before isel.
 
 import (
 	"fmt"

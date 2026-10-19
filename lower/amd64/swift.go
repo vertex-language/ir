@@ -1,31 +1,13 @@
 package amd64
 
-// Swift's registers: the ones a value travels in by declaration rather than
-// by its position in the argument sequence. See ir.SwiftSelf, ir.SwiftAsync,
-// ir.SwiftIndirectResult and ir.SwiftError.
-//
-// Neither SysV nor the Microsoft convention has any of them; they are
-// Swift's, laid over both:
+// Swift registers on x86-64 (SysV and MS ABI):
 //
 //	self             R13
 //	async context    R14
 //	error            R12
-//	indirect result  RAX under SysV; the first argument under Microsoft
+//	indirect result  RAX (SysV) / RCX (MS ABI)
 //
-// which is what LLVM's X86 calling conventions assign for swiftself,
-// swiftasync, swifterror and a Swift sret, and so what swiftc's own code
-// expects on either host. The first three are callee-saved under both
-// conventions, which is why Swift chose them: a value passed in one
-// survives calls to ordinary functions for free. The indirect result is
-// the one that differs. SysV gives it RAX, which is not an argument
-// register there; LLVM's Win64 convention has no such rule, and swiftc's
-// code for Windows takes it in RCX like any first argument -- a generic
-// `func g<T>(_ x: T) -> T` reads its metadata from R8, the third.
-//
-// None of them takes a place in the argument sequence. An argument after
-// one is placed as though it were not there -- under the Microsoft
-// convention that means it does not spend one of the four positions
-// either, and on the stack it does not own an eightbyte of home space.
+// These registers are handled outside standard argument sequence positions.
 
 import (
 	"fmt"

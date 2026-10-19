@@ -9,22 +9,9 @@ import (
 	"github.com/vertex-language/ir/lower/mir"
 )
 
-// Tail calls: a call that replaces this frame with the callee's. See
-// ir.VTailCall.
-//
-// The arguments are placed exactly as an ordinary call's, then the frame
-// comes down and control jumps rather than calls, so the callee returns to
-// this function's caller. That order is safe because the two sets barely
-// meet: the teardown restores only callee-saved registers and RSP, and the
-// only arguments that travel in a callee-saved register are Swift's self
-// and async context -- which the teardown leaves where they were put. See
-// emitTeardown.
-//
-// A callee with any argument in memory is refused. Placing one would mean
-// writing into this function's own incoming area, which is only sound
-// when it is at least as large; and a Microsoft by-reference copy lives in
-// the outgoing area of the frame the teardown is about to free. Every tail
-// call an async function makes passes its context and little else.
+// Tail calls: replaces the current frame with the callee's frame (ir.VTailCall).
+// Arguments are placed into argument registers, the stack frame is torn down,
+// and execution jumps directly to the callee. Tail calls with stack arguments are rejected.
 
 // tailTarget is where an indirect tail call's address waits while the
 // frame comes down. R11 is caller-saved and an argument register under

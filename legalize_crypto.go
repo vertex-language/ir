@@ -1,29 +1,7 @@
 package ir
 
-// Legalizing §V5's and §A8's verbs where the processor may not have them.
-//
-// §0 defines every one of these on every target with v128, and leaves to
-// lowering what it is on a processor without the instruction: a call that
-// answers the same, in time that does not depend on the operands. This
-// pass makes the calls, before instruction selection, as LegalizeHalf
-// makes the half floats into i32: a backend runs it with the capabilities
-// its target's baseline has, and what reaches its selector afterwards is
-// a module in which every verb of a capability is one the function may
-// execute -- the baseline's, or one the function Requires (§P).
-//
-// A v128 operand travels to the routine in memory, through a scratch slot
-// of the function's frame: the routine takes a pointer for each v128
-// operand and one for its result, then its i32 and i64 operands as they
-// are, then the verb's literal, if it has one, as an i32. That is a C
-// signature on every target, which a vector argument is not, and the
-// routine is the slow path in any case. The routine is vertex_<verb>
-// (vertex_v128_aes_enc, vertex_crc32c_u8); the runtime defines them.
-//
-// i1.cpu_has of a capability the baseline has is 1. Otherwise it is a call
-// of vertex_cpu_has(c), which asks the processor the first time and
-// answers from what it said after: a program's main is C's own, so there
-// is no moment before it the runtime could be sure to run in, and the
-// question is asked once per operation rather than once per block.
+// LegalizeCrypto lowers §V5 cryptographic and §A8 checksum instructions into runtime helper
+// calls (vertex_<verb>) when the target baseline lacks the necessary hardware capability (§P).
 
 // CPUHasSymbol is the routine i1.cpu_has calls where the baseline cannot
 // answer: i32 (c) -> i32, nonzero where the processor has capability c.

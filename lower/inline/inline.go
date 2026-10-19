@@ -1,25 +1,16 @@
 // Package inline copies a callee's body into its caller.
 //
-// It exists for the targets with no calling convention yet: a device
-// function on AMDGPU is unlowerable until s_swappc_b64 and the scratch
-// stack exist, and every __device__ helper would be refused by name.
-// Inlined, it is just more of the kernel. PTX has calls and gains only
-// speed, so there it is an option.
+// For GPU targets without full device calling conventions or for optimization,
+// inlining flattens function calls into the calling context.
 //
-// The transformation is the textbook one. The call's block is split after
-// the call; the callee's blocks are cloned into the caller under fresh
-// labels, its parameters renamed to the call's arguments; each return
-// becomes a branch to the split-off block, whose parameters are the
-// call's results. Nothing is simplified afterwards — the branch from the
-// call site into the callee's entry, and the entry itself, stay as they
-// are, since a backend's block layout folds an empty edge for nothing.
+// The transformation splits the call block, clones callee blocks into the caller
+// with fresh labels, substitutes arguments for parameters, and rewrites callee
+// returns as branches to the continuation block.
 //
-// What it refuses, by name: recursion, since a body copied into itself
-// never finishes; a callee that returns twice, whose second return has
-// no block to come back to. What it leaves alone: a call through a
-// pointer, a call to an import, a call to a variadic, a call to a naked
-// function or an assembly body, and every invoke — those are calls the
-// backend has to lower, or refuse, itself.
+// Refusals and exclusions:
+//   - Refuses recursion and multiple-return functions.
+//   - Leaves alone indirect calls, imports, variadics, naked/assembly bodies,
+//     and invoke terminators.
 package inline
 
 import (

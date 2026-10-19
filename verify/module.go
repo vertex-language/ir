@@ -2,32 +2,9 @@ package verify
 
 import "github.com/vertex-language/ir"
 
-// §19.10 (a global initializer's structure against its declared type) and
-// §19.18 (a struct's stated field offsets).
-//
-// §19.11 to §19.15 are not here, and this is where to find out why:
-//
-//   - §19.11 — dllimport on imports and dllexport on definitions is Go's
-//     type system, not a check: DLLImport is a method on ir.GlobalImport
-//     and ir.FuncImport, DLLExport is one on ir.Global and ir.Func, and
-//     neither type has the other's. `common` on domain rw only is
-//     ir.ErrPlacement at the declaration.
-//   - §19.12 — an ext-float namespace absent from the layout block is
-//     ir.ErrLayout, the moment b.F80() is called. Availability is the one
-//     thing Go's type system cannot carry, so it is the one that is
-//     sticky rather than a compile error.
-//   - §19.13 — sret on at most one parameter, which is the first:
-//     ir.ErrSRet, at the parameter.
-//   - §19.14 — a callind's TypeName resolves to a func typedef and its
-//     arguments match that signature: ir.ErrSignature and
-//     ir.ErrArity/ir.ErrType at the call, where the typedef is in hand.
-//   - §19.15 — module, use, and layout appear exactly once and precede
-//     every item. They are NewModule's parameters, so this stopped being
-//     a rule anything could break the day it became a constructor.
-
-// moduleItems runs the module-scope rules. Their faults carry no function
-// name: a global or a type is not in a function body, and Error prints
-// them at module scope the way ir.Error does.
+// moduleItems verifies module-scope rules: global initializers match declared types (§19.10),
+// struct field offsets conform to ABI rules (§19.18), and dynamic shared imports are valid (§19.24).
+// (§19.11–§19.15 are enforced statically by the type system and builder).
 func (c *checker) moduleItems(m *ir.Module) {
 	for _, g := range m.Globals() {
 		c.initializer(g)

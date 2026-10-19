@@ -220,12 +220,8 @@ func emitSaveArea(text *amd64asm.Section, fn *ir.Func, fr *frame) {
 		text.MovRM64R64(operand.Mem64(reg.RBP).Disp(fr.saveArea+int32(i*8)), r)
 	}
 
-	// The vector half only if there is one. AL holds the number of
-	// vector registers the caller used — milestone 30 is what sets it —
-	// and a caller that passed none may have left XMM registers holding
-	// anything at all, including values that trap to read. Skipping is
-	// not the optimisation it looks like: it is the reason AL is in the
-	// ABI.
+	// In the SysV ABI, AL holds the count of vector argument registers.
+	// If zero, skip saving XMM registers to avoid reading uninitialized values.
 	skip := fn.Name() + ".novec"
 	text.TestRM8R8(reg.AL, reg.AL)
 	text.JeLabel(skip)

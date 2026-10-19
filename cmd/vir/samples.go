@@ -2,15 +2,7 @@ package main
 
 import "github.com/vertex-language/ir"
 
-// A sample is one module this tool can build, print, and verify.
-//
-// Built rather than read. There is no .vir parser — the README's own
-// reasoning is that reading text back in would make ir/text a second
-// front door for constructing a module, with its own invariants to
-// defend — so a tool that operates on modules operates on ones it builds
-// by calling the same public API you would. That is the whole difference
-// between this and a compiler driver: a driver's input is a file, and
-// this one's is a name.
+// A sample is one module this tool can build, print, and verify using the public API.
 type sample struct {
 	name  string
 	about string

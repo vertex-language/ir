@@ -119,31 +119,9 @@ func (m *Module) deferCheck(c func() *Error) {
 	}
 }
 
-// validSymbol is the rule for a name the linker will see, which is
-// wider than the rule for a name only this IR will see: a symbol may
-// also contain "$", "?", "@" and ".".
-//
-// The characters are there for the frontends. Swift's mangling begins
-// "$s" and every symbol it produces carries one; Microsoft's C++ mangling
-// begins "?" and separates its pieces with "@" -- `??0Widget@@QEAA@XZ` is
-// a constructor -- and the fastcall convention on 32-bit Windows spells a
-// plain C function `@f@4`. GCC and Clang name a cold split `main.cold`.
-// Every object format this IR targets -- ELF, Mach-O and COFF -- takes all
-// four in a symbol without complaint. Refusing them here would mean a
-// frontend with a mangling scheme of its own could not name its own
-// functions, which is not a decision an IR should be making for it.
-//
-// "@" inside a name is no trouble for the text form, where a symbol is
-// "@" followed by the longest run of symbol characters: `@??0W@@QEAA@XZ`
-// reads as one name, because nothing in the grammar puts two symbols
-// against each other without whitespace between.
-//
-// "<" and ">" are cl's spelling of a closure type: `??R<lambda_1>@@QEBAHH@Z`
-// is a lambda's operator(), and COFF takes the angle brackets as it takes
-// the rest. The text form is unaffected for the same reason "@" is.
-//
-// They stay out of validIdent, because a block label or a type name is
-// this module's own business and gains nothing from them.
+// validSymbol reports whether s is a valid external symbol name.
+// Linker symbols admit alphanumeric characters, underscores, and characters
+// used by language mangling schemes ($, ?, @, ., <, >).
 func validSymbol(s string) bool {
 	if s == "" {
 		return false

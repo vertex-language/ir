@@ -1,24 +1,12 @@
 package ir
 
-// Optimize runs the scalar cleanups a CPU backend wants before it selects
-// instructions, the ones the AIR backend runs for Apple's compiler:
+// Optimize runs scalar optimizations prior to instruction selection:
+//   - SplitSlots & PromoteSlots (SROA and mem2reg)
+//   - FoldConstants (constant folding)
+//   - ReducePowersOfTwo (strength reduction)
+//   - MergeBlocks, ThreadJoins, NumberValues (CFG simplification and LVN)
 //
-//   - a struct's frame slot is split into its fields, and locals the
-//     frontend kept in slots become registers (SplitSlots, PromoteSlots);
-//   - a branch on two constants is decided -- every shift by a literal
-//     has two, Swift's shift testing its amount against the width -- and
-//     arithmetic on constants is done (FoldConstants);
-//   - a multiply or divide by a power of two is a shift (ReducePowersOfTwo);
-//   - the chains of blocks folding and inlining leave are merged
-//     (MergeBlocks), and a value computed twice is computed once
-//     (ThreadJoins, NumberValues).
-//
-// Without them every shift by a literal was a compare and two branches,
-// and a block of straight-line code a run of jumps to the next
-// instruction.
-//
-// It runs once on a function: the slot passes are not run twice. What
-// changes a function after it -- inlining -- is cleaned up by Tidy.
+// The slot promotion passes are run once; post-inlining cleanup uses Tidy.
 func (f *Func) Optimize() {
 	f.SplitSlots()
 	f.PromoteSlots()

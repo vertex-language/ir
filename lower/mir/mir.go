@@ -1,25 +1,9 @@
-// Package mir is machine IR: instructions in terms of virtual registers,
-// still rewritable, with no opinion about which architecture they target.
+// Package mir defines architecture-neutral machine IR: instructions in terms
+// of virtual registers with target-opaque opcodes.
 //
-// It exists to prove one design fact stated in the ir/lower README: register
-// allocation is a function of MIR, not of VIR and not of a finished
-// obj.Object, because only MIR has both vregs and the physregs an allocator
-// assigns them into. Op is `any` rather than a fixed enum so a second
-// architecture's isel can define its own opcode type without this package
-// ever knowing it exists.
-//
-// This is deliberately minimal, and it grew exactly once. A Func began as
-// an ordered list of Blocks with no CFG shape recorded at all, on the
-// grounds that nothing needed to ask where control went — only to walk
-// every instruction in program order, which an ordered slice answers.
-// Liveness is what needed to ask. A value is live at a point when some
-// path from that point reaches a use, and "some path" is not a question
-// an ordered slice can answer, so Block gained Succs and this package
-// gained live.go.
-//
-// What it still does not have is predecessors, dominance, or loop
-// structure. Liveness is a backward analysis and reads only successors;
-// the rest is the day something needs it.
+// Register allocation operates on MIR because it connects virtual registers
+// with target physical registers. Func represents an ordered list of Blocks
+// with explicit successor edges for backward dataflow analyses (liveness).
 package mir
 
 // VReg is a virtual register: an SSA-like identity with no physical home
@@ -40,9 +24,7 @@ type Instr struct {
 	// value in them: a call's caller-saved registers. Nil for most.
 	Clobbers *Clobbers
 
-	// Imm is the instruction's immediate operand, if it has one. A single
-	// int64 covers every immediate this milestone's isel builds; a wider
-	// need is a wider field when something actually needs it.
+	// Imm is the instruction's immediate operand, if it has one.
 	Imm    int64
 	HasImm bool
 

@@ -1,48 +1,9 @@
-// Package verify is §19: the well-formedness rules the grammar admits and
-// a sound module does not break.
+// Package verify implements §19 IR well-formedness validation for completed modules.
 //
-// A package rather than a method on ir.Module, for three reasons. §19 is
-// nineteen rules and wants more than one file. Its failure corpus — one
-// case per rule, each expected to fail with a named sentinel at a named
-// position — belongs next to the sentinels that name it. And a method
-// would put the verifier inside the package it verifies, where every
-// unexported field is in reach and no rule has to be sayable through the
-// public surface. As a client, the verifier is that surface's most
-// demanding reader: a rule it cannot state with exported methods is a
-// missing method, not a reason to reach inside.
-//
-// # What is checked where
-//
-// Everything the builder can catch while you emit is sticky and
-// first-wins on the module itself, and Module returns that before it
-// looks at anything else. §19.3 is the clearest case: a branch's argument
-// list against its target's parameters is a deferred builder check, since
-// a forward branch may name a block whose parameters are not declared
-// yet, and ir.Module.Err runs it. That makes soundness one call and not
-// two, and it keeps this package to what only a finished module reveals.
-//
-// # What is checked here
-//
-// Every §19 rule that survives into a finished module: §19.1 (dominance),
-// §19.2 (terminators and reachability), §19.4–5 and §19.16 (the unwind
-// rules), §19.6's second clause (a blockaddr some brind targets), §19.10
-// (a global initializer against its declared type), §19.17 (the entry
-// block is nobody's target), §19.18 (a struct's stated offsets), and
-// §19.19 (a naked function's body is assembly).
-//
-// The rest of §19 is not missing, it is elsewhere, and each file here
-// names where: verify/memory.go for §19.6's first clause and §19.7–9,
-// verify/module.go for §19.11–15. Every one of those is a fact about a
-// single instruction or declaration in isolation, which is what the
-// builder catches as you emit and reports through ir.Module.Err — which
-// both entry points below return before they look at anything else.
-//
-// Two clauses are checked by neither, and both are the same kind of gap:
-// they need a target ABI, and this repo has none. §19.18's alignment
-// clause wants a per-type alignment table, which §3's layout block does
-// not carry; §19.10 declines to range-check an initializer whose literal
-// may be a symbolic sizeof. Both belong where a Layout becomes a target,
-// which is ir/lower.
+// Rules checked here include SSA dominance (§19.1), block terminators and CFG
+// reachability (§19.2, §19.17), landing pads and exception unwinding (§19.4–5, §19.16),
+// block address usage (§19.6), global initializers (§19.10), and struct field offsets (§19.18).
+// Single-instruction and syntactic invariants are checked earlier by the builder.
 package verify
 
 import (

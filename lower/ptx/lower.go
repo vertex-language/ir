@@ -1,45 +1,30 @@
-// Package ptx lowers VIR to a *ptx.Module: PTX, the virtual ISA every NVIDIA
-// toolchain stops at.
+// Package ptx lowers VIR to a *ptx.Module (NVIDIA PTX virtual ISA).
 //
-// # What is different about this backend
+// # Design Notes
 //
-// PTX is itself a virtual-register IR. Registers are unlimited and typed,
-// ptxas allocates them, and a block argument is a move rather than a
-// parallel assignment — a fresh temporary per edge argument costs nothing
-// and ptxas coalesces it. So there is no mir here, no regalloc, no frame
-// planning and no emit step: this package is instruction selection, and the
-// *ptx.Module it hands back is the finished artifact the way an
-// *amd64obj.Object is. ptx/text prints it; the driver's JIT or ptxas takes
-// the text. Nobody outside NVIDIA emits SASS, and LLVM's own NVPTX backend
-// stops exactly here.
+// PTX is a typed, virtual-register IR with unlimited registers allocated by
+// ptxas. Block arguments map to moves coalesced by ptxas, eliminating the need
+// for MIR, register allocation, or machine frame planning; this package directly
+// performs instruction selection into a *ptx.Module.
 //
-// # What it must not get wrong
+// # Correctness Rules
 //
-// Rounding is spelled. Every f32 and f64 add, sub, mul, fma, div and sqrt
-// carries .rn; without it ptxas may contract a mul and an add into an fma
-// and may use an approximate divide, and §0 says round-to-nearest-even,
-// one rounding per verb. Nothing carries .ftz: denormals are IEEE.
+//   - Rounding: All f32/f64 operations explicitly specify .rn (round-to-nearest-even)
+//     to prevent contraction into approximate divides or unintended FMAs. Denormals
+//     are preserved (no .ftz).
+//   - Traps: GPU execution does not fault on division by zero or conversion
+//     overflow; integer division and non-saturating conversions emit range tests
+//     and predicated traps before the operation. Saturating conversions directly use
+//     clamping and NaN->0 behavior.
 //
-// Traps are explicit. A GPU does not fault on a zero divisor or an
-// out-of-range conversion; PTX's div yields an unspecified value and cvt
-// saturates. So i32.sdiv is a compare and a predicated trap before the
-// divide, and the non-_sat_ float-to-int rows are a range test and a trap
-// before the cvt — while the _sat_ rows are the cvt alone, whose clamp and
-// NaN→0 are what §C2 asks for.
+// # Subsystem Layout
 //
-// A trap on a GPU is sticky: the context is faulted and every later launch
-// in it fails. That is "traps" as §0 means it; nothing here expects a
-// signal.
-//
-// # Where things live
-//
-// lower.go is the entry point, the layout check and the SM gate. types.go
-// is the VIR-type-to-PTX-type table. func.go is a function's state:
-// registers, labels, parameters, the local depot. isel.go selects
-// instructions, control.go selects terminators and edge moves, call.go
-// builds the .param marshalling sequence, atomic.go is §H with its scopes,
-// bulk.go is §E as inline loops, and global.go is the lower/globals adapter
-// that turns bytes into .global, .const and .shared declarations.
+//   - lower.go: Entry point, layout validation, and SM gating.
+//   - types.go: VIR-to-PTX type translation.
+//   - func.go: Virtual registers, labels, parameters, and local depot.
+//   - isel.go / control.go: Instruction selection and terminators.
+//   - call.go: Parameter marshaling.
+//   - atomic.go / bulk.go / global.go: Memory scopes, bulk loops, and declarations.
 package ptx
 
 import (

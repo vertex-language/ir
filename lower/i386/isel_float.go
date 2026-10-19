@@ -200,29 +200,13 @@ func iselCopySign(c *cursor, vr *vregs, fr *frame, in *ir.Inst) error {
 
 // iselFloatMinMax lowers §A3's four min and max verbs.
 //
-// MINSS is not IEEE minimum and MAXSS is not maximum. Both return their
-// *second* operand whenever the pair is unordered or the two compare equal,
-// which is wrong for a NaN under one reading and for a signed zero under
-// both — and is not even commutative. So each verb is the instruction for the
-// ordinary case and an explicit answer for the two that are not.
-//
-// UCOMIS makes the split cheap: it sets ZF for an equal pair *and* for an
-// unordered one, and PF only for the unordered one. So a single JE separates
-// "distinct ordered values", where the instruction is right, from everything
-// else.
-//
-// What the remaining cases want:
-//
-//   - Both zeroes, differing in sign. §A3 pins these: minimum and minnum give
-//     −0, maximum and maxnum give +0. OR'ing the two operands together gives
-//     −0 and AND'ing gives +0, which is exactly the pair.
-//
-//   - Either a NaN. minimum and maximum propagate it, which OR does — the
-//     exponent's ones and the mantissa's survive it — and AND does not, so a
-//     maximum separates the unordered pair from the equal one rather than
-//     merging both the same way. minnum and maxnum discard the NaN, which
-//     needs the other operand, so those test for it first and hand back the
-//     one that is not.
+// x86 MINSS/MAXSS return their second operand on unordered or equal comparisons,
+// which does not satisfy IEEE 754 for signed zeros or NaNs. UCOMIS sets ZF for
+// both equal and unordered pairs, and PF for unordered pairs:
+//   - Zeroes differing in sign: minimum/minnum produce -0 (OR of operands),
+//     maximum/maxnum produce +0 (AND of operands).
+//   - NaNs: minimum/maximum propagate NaN (OR propagates mantissa/exponent bits),
+//     while minnum/maxnum discard NaN and select the non-NaN operand.
 func iselFloatMinMax(c *cursor, vr *vregs, in *ir.Inst) error {
 	verb := in.Op().Verb
 	ops, err := operands(vr, in, 2)

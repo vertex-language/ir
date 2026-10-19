@@ -1,30 +1,10 @@
 package ir
 
-// Straightening the control flow an inliner leaves.
-//
-// Inlining a call splits its block at the call and branches into the
-// callee's copy and back out of it, so a kernel whose helpers have all
-// been inlined is a chain of blocks that each do a little and branch to
-// the next -- one per call, one per return -- and of blocks that do
-// nothing but branch. A CPU backend's own block layout makes most of
-// those branches fall-throughs. A GPU compiler handed the chain as it is
-// (Apple's, reading AIR) keeps a branch, and the bookkeeping around it,
-// for each one: measured on a q4_0 matrix-vector kernel, the chain cost
-// it a third of its time.
-//
-// MergeBlocks does two things until neither applies:
-//
-//   - A block that ends in an unconditional branch to a block with no
-//     other predecessor takes that block's instructions and terminator,
-//     the successor's parameters becoming the branch's arguments.
-//
-//   - A block that has no instructions and only branches on is skipped:
-//     each predecessor branches where it would have, with the arguments
-//     it would have passed, when the skipped block's parameters are read
-//     nowhere but in that branch.
-//
-// Entry blocks and landing pads stay as they are: what reaches a pad is
-// an unwind, not a branch.
+// MergeBlocks straightens CFG control flow by iteratively applying two rules:
+//   - A block ending in an unconditional branch to a single-predecessor successor
+//     absorbs that successor's instructions and terminator.
+//   - An empty trampoline block that only forwards a branch is bypassed by predecessors.
+// Entry blocks and landing pads are preserved.
 
 // MergeBlocks straightens f's control flow and reports how many blocks it
 // removed.

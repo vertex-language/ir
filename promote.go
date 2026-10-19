@@ -1,34 +1,10 @@
 package ir
 
-// Frame-slot promotion: mem2reg.
+// PromoteSlots implements mem2reg: promoting eligible entry-block alloc slots
+// into SSA values and block parameters using iterated dominance frontiers (Cytron et al.).
 //
-// A frontend lowers a local variable the simple way -- an alloc in the
-// entry block, a store for every assignment, a load for every read -- and
-// that is the shape a C++ frontend has to start from, since it cannot know
-// until the function is finished whether some later `&x` takes the
-// variable's address. Lowered as it stands each read and write is a memory
-// access, and a loop counter costs a load and a store per iteration.
-//
-// When nothing does take the address -- every use of the alloc is a plain
-// load from it or a plain store to it, all of the one register type -- the
-// slot is only a variable, and this pass makes it one: each load becomes the
-// value last stored on the way to it, and a block where differing values
-// meet takes the value as a block parameter. This is the textbook
-// construction (Cytron et al.): parameters at the iterated dominance
-// frontier of the stores, pruned to the blocks the slot is live into, then
-// a walk of the dominator tree carrying the current value down it.
-//
-// What is left alone: a slot any other instruction touches (a call, an
-// address computation, a sub-width access, an asm operand); a volatile
-// access; an allocation sized by a named type; and a slot that would need a
-// parameter on a block that cannot take one -- the entry, a pad, or a block
-// some predecessor reaches by an edge with no argument list (brind, asm
-// goto's label list, an unwind edge). A function that calls something
-// that returns twice is left alone entirely, as LLVM leaves it.
-//
-// A load with no store on some path to it reads what an uninitialized
-// local holds, which is undefined; here it reads zero, and a zeroed alloc
-// starts from zero anyway.
+// Slots with address-taken uses, sub-width accesses, volatile ops, or named-type
+// sizes are excluded. Uninitialized reads default to zero.
 
 // PromoteSlots rewrites every promotable alloc in f to SSA values, and
 // reports how many it promoted.

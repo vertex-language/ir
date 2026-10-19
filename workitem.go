@@ -1,29 +1,7 @@
 package ir
 
-// §W. Work-items.
-//
-// A kernel runs once per work-item, over a grid the host chose, and the
-// first six verbs here are how a work-item learns where in that grid it
-// is. They are i32 verbs with a literal axis rather than six special
-// registers because the IR has no register that is not a value, and they
-// are spelled in HSA's vocabulary — workitem, workgroup, wave — rather
-// than CUDA's, because the IR names hardware and both vendors' hardware
-// has these. threadIdx.x is i32.workitem_id x; blockDim.x is
-// i32.workgroup_size x; warpSize is i32.wave_size.
-//
-// The wave verbs exchange values between the work-items of one wave
-// without going through memory. Their mask operand is CUDA's member mask,
-// which PTX has needed since independent thread scheduling; a target
-// whose waves cannot diverge within an instruction has no use for it and
-// reads the execution mask instead.
-//
-// barrier is bare: every work-item of the workgroup arrives before any
-// leaves, and every access before it is visible to every work-item after
-// it. A work-item that neither arrives nor exits keeps the others waiting,
-// which is a hang and not a wrong answer — the same class of defined
-// behaviour an infinite loop is.
-//
-// A CPU has none of this and refuses each verb by name.
+// §W Work-items: verbs providing execution grid dimensions, work-item / workgroup IDs,
+// cross-lane wave exchanges, and workgroup barriers for GPU targets.
 
 // An Axis is §W's literal axis operand.
 type Axis uint8

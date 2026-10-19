@@ -157,18 +157,8 @@ type AsmGotoStmt struct {
 }
 
 // AsmGoto begins asm goto, the terminator form. It is implicitly volatile.
-//
-// Its outputs are the trailing parameters of the fallthrough target, exactly
-// as an invoke's results are the trailing parameters of its normal target,
-// and for the same reason: a register the instruction defined would have to
-// dominate every edge, and on an edge the assembled text branched along, the
-// text did not reach the end that writes the output. The fallthrough edge is
-// the one on which it did — which is what GCC means when it says an asm
-// goto's outputs are valid on the fallthrough path.
-//
-// So Out declares a type and a constraint here, and does not return a value:
-// the value is the target block's parameter, live where it is defined and
-// nowhere else. §19.16's arity rule covers it the way it covers invoke.
+// Its outputs become trailing parameters of the fallthrough target block,
+// matching invoke semantics.
 func (b *Builder) AsmGoto(template string) *AsmGotoStmt {
 	return &AsmGotoStmt{b: b, a: Asm{Template: template, Volatile: true}}
 }
@@ -278,20 +268,7 @@ func (m *Module) Asms() []*ModuleAsm {
 	return out
 }
 
-// AsmBody gives a function a body of assembly instead of blocks, and marks it
-// naked.
-//
-// Naked implies it rather than requiring it to be stated first, because the
-// two are the same fact: a function whose body is assembly has no prologue to
-// emit, no epilogue to reach, and no frame for a lowering to lay out — there
-// is nothing else "naked" could mean here. GCC's rule is the same one from the
-// other side, where a naked function's body may contain only asm statements.
-//
-// The template is not a template. It takes no operands, so it has no %0 to
-// substitute and no numbering to get wrong: a %% in it is whatever the
-// assembler makes of it, and the parameters this function's signature declares
-// are reachable only where the calling convention put them, which is what a
-// naked function is written to know.
+// AsmBody gives a function a body of assembly instead of blocks, and marks it naked.
 func (f *Func) AsmBody(text string) *Func {
 	if f.m.err != nil {
 		return f

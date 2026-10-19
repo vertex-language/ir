@@ -2,27 +2,9 @@ package ir
 
 import "sort"
 
-// Frame-slot splitting: scalar replacement of aggregates, the part of it
-// promotion needs.
-//
-// A frontend keeps a struct in a frame slot and reaches each field by an
-// offset from it -- `ptr.add %slot, 8` then a load -- and PromoteSlots
-// leaves such a slot alone, since an address computation is not a plain
-// load or store. When every use of the slot is a plain access at a
-// constant offset, directly or through such a `ptr.add`, and the accesses
-// at different offsets do not overlap, the slot is really one variable per
-// field. This pass makes it that: a slot of its own for each offset, each
-// access rewritten to it, the address computations gone. PromoteSlots then
-// promotes each on its own.
-//
-// It matters most where a pointer lives in a struct on a GPU: a device has
-// no generic pointer, a pointer's space is inferred from where it came
-// from, and one read back from memory has come from nowhere. Split and
-// promoted, it comes from where it was made.
-//
-// What is left alone: a slot any other instruction touches, a volatile
-// access, an offset that is not a constant, a slot sized by a named type,
-// and accesses at one offset of different widths or that overlap another.
+// SplitSlots performs scalar replacement of aggregates (SROA) on frame slots.
+// If all uses of an alloc slot are non-overlapping accesses at constant offsets,
+// the slot is split into individual allocs per field to enable subsequent SSA promotion.
 
 // SplitSlots splits every splittable alloc in f into one per field, and
 // reports how many it split.

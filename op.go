@@ -232,16 +232,8 @@ const (
 	VCall    Verb = "call"
 	VCallInd Verb = "callind"
 
-	// A tail call replaces this frame with the callee's rather than
-	// building one on top of it: the frame is torn down, the arguments
-	// are placed, and control branches. It is a terminator because
-	// nothing follows it -- the callee returns to this function's
-	// caller, never here.
-	//
-	// It is a guarantee and not an optimisation. Swift's async
-	// functions are a chain of these, and a chain that consumed a frame
-	// each time would be a recursion the length of the program's
-	// waiting. That is why swiftc emits `b`, not `bl`.
+	// A tail call replaces this frame with the callee's rather than building
+	// a new frame: the current frame is torn down and control branches directly.
 	VTailCall    Verb = "tail_call"
 	VTailCallInd Verb = "tail_callind"
 

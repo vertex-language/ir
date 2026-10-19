@@ -1,43 +1,11 @@
 package amdgpu
 
-// The device calling convention. Every function this backend emits is
-// compiled by this backend, so the convention is its own rather than
-// LLVM's, and chosen for what O0 can do without an allocator that
-// understands clobbers:
-//
-//   - Arguments in v0 upward, a dword each, a 64-bit value in an
-//     even-aligned pair, an i1 as 0 or 1 in a dword; results the same
-//     from v0. More than thirty-two dwords of either is refused.
-//   - The return address in s[30:31], written by s_swappc_b64; s32 the
-//     stack pointer, s33 the frame pointer, s[34:35] scratch for the
-//     target address. The stack is the private segment: SP counts bytes
-//     of it, per lane, the way scratch addresses do.
-//   - The callee saves every register it touches and restores it before
-//     returning — VGPRs to its frame, SGPRs to lanes of v58 — except the
-//     ones its results come back in. A caller therefore keeps nothing
-//     live in v0..v31 across a call and everything else where it was,
-//     which is why the call instruction needs no clobber list: its
-//     arguments and results are pinned vregs, and the allocator keeps
-//     everything else out of those registers while they are live.
-//   - The execution mask is the caller's, and is what it was on return.
-//   - The work-item's place in the grid travels implicitly, the way
-//     LLVM passes it: the three work-item ids packed ten bits each in
-//     v31, the workgroup ids in s[36:38], the workgroup sizes in
-//     s[39:41] and the workgroup counts in s[42:44]. A kernel that calls
-//     fills them at entry, whatever it uses itself, and every device
-//     function may read them.
-//
-// A function that calls, and every device function, allocates from a
-// pool that leaves v0..v31 and s30..s45 alone, so a pinned argument
-// never overlaps a value the allocator placed.
-//
-// A kernel's private segment is its own frame plus the deepest chain of
-// frames beneath it, so device functions are lowered before the kernels
-// that call them, callees before callers; recursion is refused, since
-// it has no bound. An indirect call is assumed to reach the deepest
-// device function in the module, and its target is read from the first
-// active lane: a function pointer that differs across the wave is
-// refused, since a waterfall loop is not written.
+// Device calling convention:
+//   - Arguments and results in v0 upward (scalars in single VGPRs, 64-bit values in aligned pairs).
+//   - Return address in s[30:31] (s_swappc_b64); stack and frame pointers in s32/s33.
+//   - Callee saves all touched registers (VGPRs to scratch frame, SGPRs spilled to lanes of v58).
+//   - Grid position / thread IDs passed implicitly in v31 and s[36:44].
+// Recursive calls and calls to unresolved imports are rejected.
 
 import (
 	"fmt"

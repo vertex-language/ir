@@ -1,46 +1,8 @@
 package arm64
 
-// Compact unwind: the table that lets a stack be walked without the code that
-// built the frame.
-//
-// # What it is
-//
-// Darwin does not ship DWARF call frame information in a shipping binary. It
-// ships __TEXT,__unwind_info: a two-level page table, sorted by address,
-// mapping a function to a thirty-two-bit description of its prologue. The
-// unwinder binary-searches it, decodes the word, and puts the caller's
-// registers back — no state machine, no FDE program, four bytes per frame.
-//
-// The linker builds that table. What a compiler emits is one fixed-size
-// record per function into __LD,__compact_unwind, and the container is the
-// point of the odd segment name: __LD is a segment no image has, so a section
-// in it cannot survive a link by accident, and the linker is obliged to
-// consume it.
-//
-// # Why the frame layout is not free
-//
-// The encoding this backend writes is UNWIND_ARM64_MODE_FRAME, and what it
-// says about the callee-saved registers is a set of bits — one per pair, no
-// offsets. libunwind reads the registers out of X29-8 downwards in a fixed
-// order, so where a save lands is not this package's decision to make. That
-// is what frame.saveBytes and frame.local are for: the locals are planned
-// before the allocator has said which registers need saving, and are moved
-// down out of the way once it has.
-//
-// One bit per *pair* is the other half of it. There is no encoding for "X19
-// was saved and X20 was not", and an unwinder that sees the bit restores both
-// — from a slot that would hold nothing. So a saved register drags its
-// partner along; see savedPairs.
-//
-// # What is not written
-//
-// UNWIND_ARM64_MODE_DWARF, which names an FDE in __eh_frame for a frame no
-// encoding can describe. Nothing here builds an FDE, so the one frame this
-// backend cannot describe — a function whose body is raw assembly — gets a
-// record with an encoding of zero instead. Zero means "no information"; the
-// unwinder stops there rather than walking past it wrongly, which is what a
-// missing record would have made it do, since the table is a range table and
-// a gap in it belongs to whatever function precedes it.
+// Compact unwind: generates __LD,__compact_unwind records for Darwin / Mach-O.
+// Uses UNWIND_ARM64_MODE_FRAME encoding describing saved register pairs (X19..X28, FP/LR)
+// and stack allocation depths.
 
 import (
 	arm64asm "github.com/vertex-language/arm64"

@@ -7,22 +7,8 @@ import (
 	"github.com/vertex-language/ir/lower/regalloc"
 )
 
-// The peephole pass: what isel leaves for a second look.
-//
-// isel selects one instruction at a time and knows nothing of its
-// neighbours, which is the right shape for a selector and the wrong one for
-// the code: a constant is materialized and then added, a comparison is
-// materialized into a register and then compared with zero, an address is
-// summed and then loaded through. Every one of these is one instruction on
-// this architecture, and the pass here turns the pairs into it.
-//
-// It runs on MIR, after isel and before register allocation, so that what
-// it removes never costs a register, and it works within a block on a value
-// with one definition and one reader -- which is nearly every temporary
-// isel makes, and the only kind whose producer can be deleted when its
-// consumer absorbs it. Nothing here reorders, moves across a block, or
-// reasons about flags beyond adjacency: a comparison and the branch that
-// reads it are fused only when nothing stands between them.
+// The peephole pass combines adjacent MIR instruction pairs within a basic block
+// before register allocation:
 //
 // What it does, in the order it does it:
 //

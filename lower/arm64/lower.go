@@ -1,73 +1,12 @@
 // Package arm64 lowers VIR to a finished, immutable *arm64/obj.Object.
 //
-// The second architecture in this tree, and written after the first rather
-// than beside it, which is why it shares mir and regalloc and shares nothing
-// else yet. What is genuinely common between the two backends is visible now
-// in a way it could not be before — the frame planning, the parallel copy on a
-// branch edge, the shape of isel's dispatch — and hoisting it is a job for
-// when both are complete rather than one.
+// # Architecture Highlights
 //
-// # What differs from the amd64 backend, and why
-//
-// Three addresses, not two. Every A64 data-processing instruction names its
-// destination separately from both operands, so nothing has to be copied into
-// place before an add and the two-address dance amd64's isel does is simply
-// absent here.
-//
-// No flags on arithmetic. ADD does not set NZCV; ADDS does. So a comparison is
-// always its own instruction and there is no fusing to decide about — where
-// the amd64 backend asks whether a compare's only reader is a branch, this one
-// materializes every §B result with CSET and lets the allocator coalesce.
-//
-// A fixed instruction width, which is what makes constants and addresses
-// interesting. No instruction takes a 64-bit literal: a wide constant is a
-// MOVZ and a run of MOVKs, and a symbol's address is ADRP plus ADD.
-//
-// The frame record rather than a pushed frame pointer. STP with pre-index
-// stores X29 and X30 and moves SP in one instruction, and X30 is a register
-// rather than a return address on the stack — a leaf function that stores
-// nothing needs no prologue at all.
-//
-// # What is still missing
-//
-// §A through §C4 lower completely, as do §D, §D2, §E, §F, §G and §H. What
-// does not:
-//
-//   - §I under the base standard's variadic convention. Apple's variant is
-//     written and is what Options.Variadic selects; the base standard needs
-//     a register save area in the prologue and a two-region walk in va_arg,
-//     and is refused by name rather than lowered as Apple's.
-//   - §D3's tlsaddr.
-//   - §C2 and §C3 out of an extended float. f80 is refused outright and
-//     stays refused: AArch64's long double is binary128, so f80 is a type
-//     this target does not have. f128 needs a soft-float table like the
-//     amd64 backend's.
-//   - sret as something lowering introduces. A signature that states one is
-//     honoured, and §5.5 decides what becomes of it: a result small enough
-//     or homogeneous enough comes back in registers and the parameter names
-//     a slot of the callee's own, and anything else comes back through the
-//     caller's storage, whose address is X8 — §6.9's indirect result
-//     location register, so the first real argument is still X0. What is not
-//     written is a return of more values than the signature declared, which
-//     would have to allocate the storage and rewrite the call: a
-//     legalization pass, not a selection rule.
-//   - a homogeneous aggregate of f128. Its members want Q registers, and the
-//     widths here are S and D; such an aggregate keeps the by-reference
-//     passing every aggregate used to get, which is wrong against clang but
-//     is wrong the way it already was rather than newly so. See abi.go.
-//   - a byval aggregate past the last named argument of a variadic call. It
-//     would have to be copied into the list and read back out by va_arg;
-//     it is refused by name.
-//   - §G3, which no backend in this tree implements. §G4 is implemented;
-//     see asm.go.
-//   - §G3 against a container other than Mach-O. invoke, resume and pad
-//     blocks are lowered, and unwind.go and lsda.go write the two tables
-//     Darwin reads; ELF needs DWARF call frame information in __eh_frame,
-//     which nothing here builds, so a pad block in an ELF module is refused
-//     rather than emitted without the tables that make it work.
-//   - a pad's filter clause, which is C++'s exception specification. It
-//     needs a second table after the type table and a negative index to
-//     reach it; see lsda.go.
+//   - A64 3-address instructions with independent destination and source registers.
+//   - Explicit flag-setting instructions (ADDS/SUBS/CMP); comparisons materialize via CSET.
+//   - Fixed 32-bit instruction width; constants materialize via MOVZ/MOVK chains, symbols via ADRP+ADD.
+//   - Frame records (STP X29, X30, [SP, #...]!) with return address in X30.
+//   - AAPCS64 standard and Apple Darwin calling conventions (including compact unwind and LSDA).
 package arm64
 
 import (

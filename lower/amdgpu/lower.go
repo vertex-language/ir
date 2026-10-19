@@ -1,58 +1,13 @@
 // Package amdgpu lowers VIR to a finished, immutable *amdgpu/obj.Object:
-// an HSA code object for a CDNA or GCN processor, ready for
-// amdgpu/obj/elf.WriteHSACO and hipModuleLoadData.
+// an HSA code object for CDNA and GCN processors (ready for hipModuleLoadData).
 //
-// # Milestones
+// # Key Design Details
 //
-//   - 26, a straight line. A kernel's arguments s_load out of the
-//     kernarg segment, the work-item id out of v0, a global load and a
-//     store through a flat address, s_waitcnt after every one of them,
-//     and s_endpgm. Four register classes, split statically between
-//     singles and pairs; see types.go. vector_add decodes under llvm-mc
-//     and its descriptor is clang's for the same register counts.
-//   - 27, uniform control flow. A branch whose condition every lane
-//     agrees on is s_cmp on the lane mask and s_cbranch; a loop with a
-//     uniform trip count is that twice. A branch on a divergent
-//     condition is refused by name — the exec-mask lowering is the next
-//     milestone, and refusing is what keeps this one honest.
-//   - 28, calls. There is no device calling convention yet, so every
-//     call a kernel makes is inlined first, by lower/inline, and what
-//     remains — a call through a pointer, a call to an import — is
-//     refused. Lower rewrites the module it is given to do this.
-//   - 29, the rows that are not one instruction; see seq.go.
-//   - 30 and 31, divergent control flow. A function with a branch whose
-//     condition differs across the wave is structurized after selection
-//     — every block behind a flow that narrows exec to the lanes whose
-//     predicate is set — and its branches become predicate assignments;
-//     see structurize.go. An irreducible CFG is refused by name.
-//   - 32 and 33, workgroup storage and atomics. A shared global is an
-//     LDS offset and its address the aperture over it; an access that
-//     provably goes there is a ds_* instruction. §H is the returning
-//     flat or DS atomic with each generation's cache control around it;
-//     see atomic.go.
-//   - 34, private memory. ptr.alloc is a flat pointer in the private
-//     aperture, the allocator spills VGPRs to scratch slots and SGPRs to
-//     lanes of a reserved VGPR, and a function that turns out to need
-//     scratch is selected again with it; see scratch.go.
-//   - The rest of the table: the wave verbs (wave.go), §E as unrolled
-//     copies and byte loops, and br_table as an if-chain (bulk.go).
-//   - 36, calls. A device convention of the backend's own, for what
-//     the inliner leaves; see call.go.
-//   - 37, asm, through the amdgpu repo's assembler; see asm.go.
-//
-// # What is different about this target
-//
-// Memory is asynchronous. A load issues and returns; its result arrives
-// when a counter says so, and reading the register before then reads
-// whatever was there. At O0 every memory instruction is followed by an
-// s_waitcnt for all of them, which is correct and slow, and is the pass
-// LLVM calls SIInsertWaitcnts done as a rule rather than an analysis.
-//
-// The wave is the unit of execution. An i1 is a lane mask — one bit per
-// work-item, held in an SGPR pair — and a compare writes one. A branch
-// is scalar: the hardware branches the whole wave or none of it, which
-// is why a condition that differs across lanes cannot be a branch at all
-// and needs the execution mask instead.
+//   - Memory instructions issue asynchronously and are synchronized with s_waitcnt.
+//   - Execution is SIMD wave-based; i1 conditions are 64-bit lane masks in SGPR pairs.
+//   - Divergent control flow is structurized via execution masks (structurize.go).
+//   - Local Data Share (LDS) accesses use ds_* instructions; private allocations use scratch memory.
+//   - Register allocation handles four classes: 32-bit and 64-bit VGPRs and SGPRs.
 package amdgpu
 
 import (

@@ -1,24 +1,7 @@
 package ir
 
-// Legalizing i128 into pairs of i64.
-//
-// No machine this targets has a 128-bit general register, so no backend is
-// asked to find one. This pass runs before instruction selection and takes
-// the width out of the module: every i128 value becomes two i64 halves, and
-// every i128 instruction becomes the i64 instructions that do the same work
-// over them. What reaches a backend afterwards is a module in the reg-types
-// it already had.
-//
-// It is the same arrangement i386 makes for i64 in its own isel, hoisted to
-// where one implementation serves every target. The halves are in the
-// module's byte order: little-endian keeps the low half first, which is what
-// decides the two offsets a load becomes.
-//
-// The four divisions are the exception, as §E says they are for every width
-// a target is short of: a pair cannot divide in line, and each becomes a
-// call to the helper a C compiler would call. Their signatures are the ABI's
-// own -- an i128 argument is a pair of registers and an i128 result is a
-// pair, which is exactly a call of four i64 arguments returning two.
+// LegalizeI128 lowers i128 values into pairs of i64 registers in target byte order.
+// 128-bit division and remainder operations are lowered to runtime helper calls.
 
 // I128Options settles what the legalizer cannot read off the module.
 type I128Options struct {

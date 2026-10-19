@@ -578,9 +578,9 @@ declares a parameter for each. A void call appends nothing.
 `invoke` has no result list of its own, and must not have one: a register it
 defined would have to dominate both edges, and on the unwind edge the call did
 not complete. Binding results as parameters puts them exactly where they are
-live. This is the same reasoning that gives `asm goto` no outputs (§G4) — the
-difference being that an `invoke` has one edge on which the call did complete
-and can therefore name a place for its results, and an `asm goto` has none.
+live. This is the same reasoning applied to `asm goto` (§G4, §14): its outputs
+are bound to trailing parameters on the fallthrough edge where the assembly
+completed.
 
 ```vertex-ir
 @try:
@@ -620,13 +620,13 @@ C reaches all of this through `__attribute__((cleanup))` and through
 | Instruction | Operands | Result |
 | --- | --- | --- |
 | `asm` | template string, constrained operands, clobber list | zero or more, per `asm-outs` |
-| `asm goto` | template string, constrained inputs, clobber list, fallthrough target, label list | — terminator, no outputs |
+| `asm goto` | template string, constrained inputs, clobber list, fallthrough target, label list | — terminator; outputs bind as trailing parameters on fallthrough edge |
 
 `asm` is the one instruction with no fixed operand shape and no semantics this IR
 can state. It exists because glibc, musl, and every kernel are unbuildable
-without it. `asm goto` is its terminator form, implicitly volatile; it has no
-outputs, because an output register would need a definition dominating edges on
-which no definition occurred. Results travel through memory.
+without it. `asm goto` is its terminator form, implicitly volatile. Its outputs
+are bound to trailing parameters of its fallthrough target (§14); on an edge
+branched along, no outputs are defined.
 
 Clobbers admit target register names plus `"memory"` and `"cc"`.
 

@@ -280,8 +280,7 @@ lib, err := metallib.Build(am)
 ## Where this sits
 
 There is no `asm` package and no `objectfile` layer. What this repo
-lowers to is three sibling, independently-versioned repos, one per
-architecture:
+lowers to is sibling, independently-versioned target repos:
 
 | repo | encodes | writes |
 |---|---|---|
@@ -358,6 +357,14 @@ else.
    declare no instruction for. It is that repository's work before it is
    this one's. AArch64's `long double` is binary128, so `f80` is not a
    type that target has at all.
+4. `f128` on amd64 is compiler-rt — §0 is explicit that a namespace the
+   layout admits is usable whether or not silicon implements it, and
+   that lowering supplies the call. Its §A3 rows are the arithmetic and
+   the sign verbs, not yet `sqrt`, `fma`, the min and max families or
+   the rounding four: those are libm names rather than compiler-rt ones,
+   which is a different table and a dependency on a different library.
+   §B, §C and §C2 out of `f128` are complete. arm64 needs the same table
+   and has none of it; i386's layout does not admit `f128` at all.
 5. PTX has no unaligned access. An `align` below the natural one is
    refused rather than assembled from bytes.
 6. `ptr.alloca`, `stacksave` and `stackrestore` are PTX 7.3's own
@@ -452,14 +459,6 @@ else.
 22. VIR's work-item verbs are AIR's built-in arguments. `workgroup_size`
     is the size dispatched, as CUDA's `blockDim` is, not the last
     group's own when the groups do not divide the grid.
-4. `f128` on amd64 is compiler-rt — §0 is explicit that a namespace the
-   layout admits is usable whether or not silicon implements it, and
-   that lowering supplies the call. Its §A3 rows are the arithmetic and
-   the sign verbs, not yet `sqrt`, `fma`, the min and max families or
-   the rounding four: those are libm names rather than compiler-rt ones,
-   which is a different table and a dependency on a different library.
-   §B, §C and §C2 out of `f128` are complete. arm64 needs the same table
-   and has none of it; i386's layout does not admit `f128` at all.
 
 `comdat` is emitted on amd64 and arm64 for functions and globals -- a
 COMDAT section in COFF with the function's unwind records associated, a
@@ -538,6 +537,19 @@ ir/
 ├── asm.go                    the inline-assembly escape hatch      (§G4)
 ├── meta.go                   metadata nodes and attachment         (§16)
 │
+│   ── scalar optimizations and legalizations ──
+├── cfg.go                    CFG simplification, block merging (MergeBlocks)
+├── lvn.go                    local value numbering and join threading
+├── promote.go                memory-to-register promotion (mem2reg)
+├── split.go                  scalar replacement of aggregates (SROA)
+├── unroll.go                 constant loop unrolling
+├── strength.go               strength reduction (powers of two)
+├── workitem.go               §W GPU work-item queries to parameters
+├── legalize_half.go          f16/bf16 carrier legalization
+├── legalize_crypto.go        cryptographic intrinsic capability legalization
+├── legalize_i128.go          i128 arithmetic pair legalization
+├── optimize.go               scalar optimization pipeline
+│
 │   ── the rest of the root ──
 ├── error.go                  Error + builder sentinels; sticky, first-wins
 ├── walk.go                   visitors, value/use iteration, replacement,
@@ -559,10 +571,10 @@ ir/
 ├── cmd/vir/                  vir list · vir cat · vir verify — a debugging
 │                             tool, not a compiler driver
 │
-└── lower/                    ← its own go.mod; depends on i386, amd64, arm64
+└── lower/                    ← its own go.mod; depends on target packages
     ├── go.mod                github.com/vertex-language/ir/lower
     │
-    │   ── what three backends turned out to share ──
+    │   ── shared lowering components ──
     ├── mir/                  machine IR: vregs, physregs, operand roles,
     │                         parallel copies, liveness, still rewritable
     ├── regalloc/             allocation over mir, parameterized by register
@@ -572,35 +584,35 @@ ir/
     │                         how much padding sits between two members — and
     │                         §2's sizeof/alignof/offsetof resolved against a
     │                         target's layout table
+    ├── asmtmpl/              inline assembly template operand parser
+    ├── inline/               callee inlining into callers
     │
-    │   ── and what they do not ──
+    │   ── target backends ──
     ├── i386/                 against github.com/vertex-language/i386
     ├── amd64/                against github.com/vertex-language/amd64
     ├── arm64/                against github.com/vertex-language/arm64
-    └── ptx/                  against github.com/vertex-language/ptx — isel only
+    ├── ptx/                  against github.com/vertex-language/ptx — isel only
+    ├── amdgpu/               against github.com/vertex-language/amdgpu
+    └── air/                  against github.com/vertex-language/air
 ```
 
-Each `lower/<arch>` is the same dozen files, because the job decomposes
-the same way three times: `lower.go` (the entry point and its
-`Options`), `layout.go` (that psABI's size and alignment table),
-`frame.go` (frame planning and signature classification), `isel*.go`
-(instruction selection, split by spec section where one file got long),
-`control.go` (blocks, branches, edges), `atomic.go` (§H), `variadic.go`
-(§I), `vregs.go` (the value environment and register classes),
-`types.go` (that backend's MIR opcodes), `libcall.go` (the symbols it
-invents), `global.go` (its `globals.Target` adapter), and `emit.go` (MIR
-to that assembler's typed helpers).
+Each `lower/<arch>` CPU backend shares a consistent decomposition: `lower.go`
+(the entry point and its `Options`), `layout.go` (that psABI's size and
+alignment table), `frame.go` (frame planning and signature classification),
+`isel*.go` (instruction selection, split by spec section where one file got
+long), `control.go` (blocks, branches, edges), `atomic.go` (§H), `variadic.go`
+(§I), `vregs.go` (the value environment and register classes), `types.go` (that
+backend's MIR opcodes), `libcall.go` (the symbols it invents), `global.go` (its
+`globals.Target` adapter), and `emit.go` (MIR to that assembler's typed helpers).
 
 There is no `pass/`, `abi/`, `frame/`, `unwind/`, or `debug/` package —
 not yet, and the distinction matters. `abi/` and `frame/` are not absent
 because classification and frame layout are simple; they are absent
-because all three backends turned out to want *different* shapes for
+because the backends turned out to want *different* shapes for
 them, and hoisting a common one before that is settled would be
-inventing a union rather than finding one. `mir`, `regalloc` and
-`globals` are what genuinely converged, and each was hoisted when the
-second or third backend needed it — `globals` after two backends had
-written the initializer walk independently and agreed line for line
-except where one of them had a bug.
+inventing a union rather than finding one. `mir`, `regalloc`, `globals`,
+`asmtmpl`, and `inline` are what genuinely converged, and each was hoisted when
+a subsequent backend needed it.
 
 **Import discipline, as everywhere in this project: nothing imports
 upward.**
@@ -609,7 +621,7 @@ upward.**
 ir              imports nothing outside the standard library
 ir/verify       imports ir
 ir/text         imports ir
-ir/lower        imports ir, ir/verify, plus one of i386, amd64, arm64, ptx
+ir/lower        imports ir, ir/verify, plus one of i386, amd64, arm64, ptx, amdgpu, air
 ```
 
 Nothing imports `lower`. The nested `go.mod` makes that
@@ -834,6 +846,10 @@ actually has a decision to make about:
    module did not declare — §E's `memcpy` and its neighbours. Stated
    rather than derived: nothing else here mangles a symbol, and Mach-O
    prefixes a C symbol with an underscore where ELF does not.
+
+The GPU backends parameterize hardware targets similarly: `ptx.Options` takes
+`SM` and `PTXVersion`, `amdgpu.Options` takes `ASIC` (such as `feature.GFX942`),
+and `air.Options` takes deployment `Target`, `Language`, and `Family`.
 
 `Options.Features` is deliberately not one shared vocabulary. `amd64`
 gates on `feature.Level`s named `V1`..`V4` plus orthogonal extensions

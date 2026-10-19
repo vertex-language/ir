@@ -1,35 +1,11 @@
 package arm64
 
-// §G3's unwinding terminators: invoke, invokeind and resume.
+// §G3 unwinding terminators: invoke, invokeind, and resume.
 //
-// An invoke is a call with a second edge. Everything about the call itself is
-// the ordinary sequence — iselCallSeq builds it, and the ABI does not know
-// this one may not come back — and everything about the second edge is two
-// facts written down for the tables: which bytes of the function the call
-// occupies, and which block the personality should jump to. See lsda.go.
-//
-// # Where the results land
-//
-// §14 binds an invoke's results to the trailing parameters of its normal
-// target rather than to registers of the terminator's own, because a register
-// the terminator defined would have to dominate the unwind edge, and on the
-// unwind edge no call completed. So the call writes straight into the vregs
-// those parameters already have — the same rule asm goto's outputs follow.
-//
-// # Where the bracket goes
-//
-// Around the branch instruction and nothing else. A personality looks up the
-// return address, so the range has to contain the call; it must not contain
-// the copies that read the result registers afterwards, because on the unwind
-// path those registers hold nothing and the copies did not run.
-//
-// # What keeps a value alive into the pad
-//
-// The pad is a successor of the block the invoke ends, so a value the pad
-// reads is live across the call, and every caller-saved register is a
-// destination of the call. The allocator therefore puts such a value in a
-// callee-saved register or a frame slot — which is exactly the requirement,
-// since the unwinder restores the first kind and does not touch the second.
+// An invoke emits a call instruction whose address range is registered in the LSDA
+// call-site table, with its unwind edge directing to a landing pad. Results are passed
+// as trailing parameters to the normal target block. Values live into the landing pad
+// are preserved across the call in callee-saved registers or stack spill slots.
 
 import (
 	"fmt"

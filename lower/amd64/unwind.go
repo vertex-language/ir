@@ -1,25 +1,7 @@
 package amd64
 
-// Windows x64 unwind data: the .pdata and .xdata a function needs before
-// anything can unwind through it.
-//
-// On this platform a frame is not walkable from the code. There is no frame
-// pointer convention the operating system trusts and no prologue it will
-// guess at; instead every function that is not a leaf has a RUNTIME_FUNCTION
-// in .pdata naming its bounds and an UNWIND_INFO in .xdata describing, code by
-// code, what its prologue did to the stack. RtlLookupFunctionEntry finds the
-// first and RtlVirtualUnwind replays the second backwards.
-//
-// Without it, unwinding does not degrade — it fails. longjmp on x64 is
-// implemented as an unwind, so a program that calls it through a frame with no
-// entry dies with STATUS_BAD_FUNCTION_TABLE before longjmp's target is
-// reached; so does any structured exception, and so does every stack trace a
-// debugger or a crash reporter tries to take.
-//
-// The prologue this describes is emitPrologue's, and it is described from what
-// that function reports rather than from a re-derivation of it: an unwind
-// record that disagrees with the code by one byte is worse than none, and the
-// only way to keep the two in step is for the code to say what it emitted.
+// Windows x64 SEH unwind data: emits .pdata (RUNTIME_FUNCTION) and .xdata (UNWIND_INFO)
+// describing stack frame layout and prologue operations for stack walking and exception handling.
 
 import (
 	"fmt"

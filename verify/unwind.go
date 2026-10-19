@@ -2,20 +2,8 @@ package verify
 
 import "github.com/vertex-language/ir"
 
-// §19.4 (pads and personalities), §19.5 (resume), and §19.16 (an
-// invoke's normal target).
-//
-// One clause of §19.4 is not here: that an unwind edge names a pad block
-// at all. The builder checks it at emission with ir.ErrPlacement, because
-// an unwind edge is a *ir.Block passed to Invoke rather than a
-// BlockTarget, so the block is in hand and its kind is already known.
-// What survives into a finished module is the other direction — who else
-// reaches that pad — which no single call site can see.
-
-// unwind runs the three rules in the order their faults nest: an edge
-// into a pad first, since it makes every later question about that pad
-// ambiguous, then the personality the unwinder needs to run one at all,
-// then resume, then the shape of the normal edge.
+// unwind checks landing pads and personality routines (§19.4), resume instructions (§19.5),
+// and invoke normal target parameter arity (§19.16).
 func (c *checker) unwind(f *ir.Func, blocks []*ir.Block, dt *domTree) {
 	c.padEdges(blocks)
 	if c.full() {
@@ -32,16 +20,7 @@ func (c *checker) unwind(f *ir.Func, blocks []*ir.Block, dt *domTree) {
 	c.invokeTargets(f, blocks)
 }
 
-// padEdges is §19.4's reachability clause: a pad block is reached only by
-// unwind edges.
-//
-// A pad's two parameters — the exception object and the personality's
-// selector — are supplied by the personality routine, not by an argument
-// list, which is why ir.Invoke takes the pad as a plain block and not as
-// a BlockTarget. An ordinary branch to one would arrive with both unset,
-// and there is no syntax that could set them. An invoke's *normal* edge
-// naming a pad is the same fault and is caught here too, since it is a
-// BlockTarget like any other.
+// padEdges checks §19.4: landing pad blocks can only be entered via unwind edges.
 func (c *checker) padEdges(blocks []*ir.Block) {
 	for _, b := range blocks {
 		term := b.Term()

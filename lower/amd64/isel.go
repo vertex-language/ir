@@ -740,9 +740,7 @@ func iselUCvtI64(c *cursor, vr *vregs, src, dst mir.VReg, to width) error {
 	small := c.open("ucvtsmall")
 	done := c.open("ucvtdone")
 
-	// Against zero at the full width, and not testOp: that one is the
-	// byte-wide test milestone 20 built for an i1, and the bit this needs
-	// is the sixty-fourth. L against zero is that bit on its own.
+	// Test the high bit (bit 63) via 64-bit comparison against zero (condL).
 	zero := vr.temp(w64)
 	c.Emit(mir.Instr{Op: zeroOp{}, Defs: []mir.VReg{zero}})
 	c.Emit(mir.Instr{Op: cmpOp{w: w64}, Uses: []mir.VReg{src, zero}})
@@ -1778,14 +1776,8 @@ func iselAlloc(mf *mir.Func, c *cursor, vr *vregs, fr *frame, in *ir.Inst) error
 		return nil
 	}
 
-	// §D3's zeroed alloc guarantees the storage reads as zero on entry
-	// to the live range, which means emitting the stores that make it
-	// so. That is a memset, and this is the milestone that has one.
-	//
-	// The size comes from the frame, not from the instruction: planFrame
-	// has already resolved a stated size or a named type into the bytes
-	// it reserved, and asking it again here would be asking the same
-	// question twice and risking two answers.
+	// §D3 zeroed allocation requires emitting stores (memset) to initialize
+	// the reserved frame slot to zero. Size is derived from allocSizeAlign.
 	size, _, err := allocSizeAlign(in)
 	if err != nil {
 		return fmt.Errorf("%s: %w", in.Op(), err)
@@ -1990,20 +1982,12 @@ func iselGetAddr(mf *mir.Func, c *cursor, vr *vregs, in *ir.Inst) error {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 	if isImportSym(sym) && c.fn.Module().Layout().ABI != abiMS {
-		// A symbol this module only declares may be defined in a shared
-		// library, whose address is not a link-time constant. A RIP-relative
-		// LEA would bake one in; the address has to be read from the GOT,
-		// which the loader fills. It is what the platform's compilers emit,
-		// and where the definition turns out to be in this link the linker
-		// relaxes the load back into an LEA.
+		// A declared-only symbol may reside in a shared library whose address is
+		// not a link-time constant. On ELF/Mach-O, read via the GOT so the loader
+		// can populate it (relaxable to LEA if locally bound).
 		//
-		// PE has no GOT and COFF has no relocation that would name one, so
-		// the Microsoft ABI takes the LEA below. That is what MSVC emits for
-		// an ordinary extern, and it is right for everything a static
-		// library provides. A symbol that really does live in a DLL needs
-		// __declspec(dllimport), which makes the reference an indirection
-		// through __imp_ — a different mechanism at the source level, not a
-		// decision this can make from the declaration alone.
+		// PE has no GOT; externs default to LEA for static linking. DLL imports
+		// require __declspec(dllimport) / __imp_ prefix at the source level.
 		c.Emit(mir.Instr{Op: movSymGotOp{sym: sym.Name()}, Defs: []mir.VReg{dst}})
 		return nil
 	}
@@ -2021,26 +2005,13 @@ func isImportSym(s ir.Symbol) bool {
 	return false
 }
 
-// PE's static thread-local model, which is the one Windows uses and the one
-// this backend implements.
+// tebTLSPointer is the byte offset of ThreadLocalStoragePointer in the 64-bit TEB.
 //
-// A thread-local does not have an address; it has an offset into a block
-// each thread owns a copy of. Finding the copy is four instructions and two
-// symbols the CRT supplies:
-//
-//	mov rax, gs:[0x58]          the TEB's ThreadLocalStoragePointer
-//	mov ecx, [rip + _tls_index] this module's slot in it
-//	mov rax, [rax + rcx*8]      this thread's block for this module
-//	lea rax, [rax + v@SECREL32] the variable within the block
-//
-// which is what clang emits, instruction for instruction. MSVC writes the
-// last step as a mov of the offset into a register and an add, because its
-// assembler will not put a relocation in a displacement field; ours will,
-// for an offset kind, so the shorter form is available. Both are the same
-// four values in the same order.
-//
-// The 0x58 is the TEB layout and not a number this could derive. It is fixed
-// by the platform, and the same constant appears in every Windows compiler.
+// Under the Windows x64 static TLS model:
+//	mov rax, gs:[0x58]          // TEB.ThreadLocalStoragePointer
+//	mov ecx, [rip + _tls_index] // module TLS slot
+//	mov rax, [rax + rcx*8]      // thread block for this module
+//	lea rax, [rax + v@SECREL32] // variable offset within block
 const tebTLSPointer = 0x58
 
 // tlsIndexSymbol is the CRT's, one per image: which slot of the thread's

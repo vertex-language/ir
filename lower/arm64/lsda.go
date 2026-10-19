@@ -1,51 +1,10 @@
 package arm64
 
-// The language-specific data area: the table a personality routine reads to
-// decide whether this frame handles an exception, and where to jump if it
-// does.
+// Language-Specific Data Area (LSDA) table generation (Itanium C++ ABI exception handling).
 //
-// # The shape
-//
-// It is the Itanium C++ ABI's, which is what every Unix personality reads
-// whatever language threw — __gxx_personality_v0, __objc_personality_v0 and
-// Rust's all parse the same four parts:
-//
-//   - a header, naming how the two tables below are encoded;
-//   - the call-site table, mapping a range of the function to a landing pad
-//     and an action;
-//   - the action table, a chain of type indices per landing pad;
-//   - the type table, indexed backwards from its own end, holding the
-//     type-info the catch clauses name.
-//
-// # What this emits, and what it does not
-//
-// LPStart is omitted, which makes every offset relative to the function's
-// first byte. The call-site encoding is uleb128 and the type-table encoding
-// is indirect|pcrel|sdata4 — a distance to a GOT slot, because the class a
-// @catch names may be in another image and a read-only section cannot hold a
-// relocated pointer into one.
-//
-// The call-site table covers the function end to end. A region with no
-// invoke in it gets an entry with no landing pad rather than a gap: an
-// address the table does not mention is not "nothing happens here" to every
-// personality that reads it, and the cost of saying so is three bytes.
-//
-// Filter clauses — C++'s exception specifications — are not emitted. They
-// need a second table after the type table and a negative index to reach it,
-// and no frontend in this tree produces one.
-//
-// # The selector
-//
-// §G3 says a pad's second parameter is "the personality's selector value"
-// and stops there, which was room to choose. What this backend delivers is
-// the 1-based position of the matching clause among the pad's *catch*
-// clauses, or zero when the pad was entered to run its cleanup.
-//
-// The raw value is an index into the function's type table, and a frontend
-// that had to predict one would have to know how many clauses every earlier
-// pad declared — which is a fact about a table it cannot see. Since a pad's
-// clauses are consecutive in that table, the translation is one subtraction,
-// and the common case of a single pad needs not even that.
+// Encodes the call-site table, action table, and type table used by personality routines
+// (__gxx_personality_v0, etc.) to dispatch exceptions to landing pads. Selector values
+// correspond to the 1-based index of matching catch clauses (or 0 for cleanups).
 
 import (
 	"fmt"

@@ -66,51 +66,19 @@ type Target interface {
 	// Section is the builder for one of the three sections.
 	Section(Kind) Section
 
-	// TLSSection is where a global in domain tls goes, or nil where this
-	// target has no TLS model.
-	//
-	// A nil answer is what makes the walk refuse a thread-local rather
-	// than put one somewhere nothing can reach it from. The storage and
-	// the sequence that finds it are one feature: a target that emits the
-	// bytes and cannot lower ptr.tlsaddr has produced a global no
-	// instruction can address, which is worse than not compiling.
-	//
-	// The kind is Data or BSS, decided the same way it is for an ordinary
-	// global. A target with one thread-local section ignores it; Mach-O
-	// has two, __thread_data and __thread_bss, and a zeroed template
-	// belongs in the second for the same reason .bss exists.
+	// TLSSection returns the section for a global in domain tls, or nil if unsupported.
 	TLSSection(Kind) Section
 
 	// PtrBytes is how many bytes an address initializer fills.
 	PtrBytes() uint64
 }
 
-// A NamedSections target can place a global in a section the module named,
-// which is §5's section attribute.
-//
-// It is optional because it is a container question rather than an
-// architecture one: a target that cannot spell a custom section refuses the
-// global instead of putting it somewhere nothing finds it. That is not a
-// corner. An Objective-C image is a dozen named sections — __objc_classlist,
-// __objc_selrefs, __objc_methname — none of which is reachable from any call,
-// because the runtime finds its work by walking them.
-//
-// The kind is Data, ROData, RelROData or BSS, decided the same way it is for
-// an ordinary global: it says what the *contents* are, which is what decides
-// whether the section holds bytes or only a size. The name says where they
-// go.
+// A NamedSections target can place a global in an explicitly named section (§5).
 type NamedSections interface {
 	NamedSection(name string, k Kind) Section
 }
 
-// A ComdatSections target can place a global in a section the linker keeps
-// once however many objects define it -- §5's comdat attribute, which is
-// what a virtual table or a template's static member is in every unit that
-// uses it.
-//
-// The section is elected on the global's own name, or on the key the
-// attribute names. A target without the notion refuses the global rather
-// than emitting a definition the linker will see twice.
+// A ComdatSections target can place a global in a COMDAT section (§5).
 type ComdatSections interface {
 	ComdatSection(k Kind, leader string) Section
 }

@@ -2,27 +2,9 @@ package ir
 
 import "fmt"
 
-// Unrolling a loop that runs a known, small number of times.
-//
-// A kernel's innermost loops are often of this kind -- four rows of a
-// block, eight quants of a lane -- and a GPU wants them straight: the
-// loads of every iteration issued together, rather than one iteration's
-// waiting on the last one's branch. A CPU compiler unrolls them itself;
-// Apple's, reading AIR, does not, and a q6_K matrix-vector kernel ran 20%
-// faster with its loop of four written out.
-//
-// UnrollConstantLoops takes the loop of this shape, the one an inliner and
-// MergeBlocks leave for `var i = c0; while i < n { ...; i = i &+ s }`:
-//
-//	@pre:              ... br @h(c0, a...)
-//	@h(%i, %a...):     [pure instructions]; %t = cmp %i, n; brif %t, @body, @exit(...)
-//	@body:             ...; br @h(%i + s, b...)
-//
-// where c0, n and s are constants, @body has no other predecessor and @h
-// no others than @pre and @body. Its iterations are counted by running
-// the counter, and when there are at most maxTrips of them and the copies
-// stay under maxInsts instructions, @h and @body are replaced by one block
-// of them in order, which then branches to @exit as the last test would.
+// UnrollConstantLoops unrolls loops that execute a known, small constant number
+// of iterations (bounded by maxTrips and maxInsts), replacing the loop header
+// and body with a straight sequence of unrolled iterations.
 
 // The bounds on what is unrolled: iterations, and the instructions of
 // the copies -- this IR's, in which every constant is one.

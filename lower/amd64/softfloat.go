@@ -392,20 +392,15 @@ func f64ToF128Bits(f float64) (lo, hi uint64) {
 	return frac << 60, sign<<63 | e<<48 | frac>>4
 }
 
-// iselSoftFixOut lowers §C2's conversions out of f128 into an integer.
+// iselSoftFixOut lowers §C2 conversions from f128 into an integer.
 //
-// Milestone 27's shape, one level out. There the conversion was an
-// instruction that does not trap and the range check around it was two
-// compares and a branch; here the conversion is a call that is undefined out
-// of range, and the compares are calls too — compiler-rt's, whose answer is
-// an int whose sign is the ordering.
+// Because f128 integer conversion libcalls are undefined out-of-range, bounds
+// checks are emitted first via compiler-rt comparison calls.
 //
-// Which leaves the interval, and it is the same interval every other §C2 row
-// in this tree admits: the source values whose truncation toward zero the
-// destination can hold. Both ends are exclusive here, which they are not at
-// f64 — binary128 keeps 113 significant bits, so it can name values between
-// −2^63−1 and −2^63, all of which truncate to −2^63 and none of which a
-// double can express. Trapping on those would be trapping on valid programs.
+// The valid interval covers source values whose truncation toward zero fits in
+// the destination integer type. Because binary128 has 113 significand bits, bounds
+// are checked exclusively to avoid trapping on values between -2^63-1 and -2^63
+// that correctly truncate to -2^63.
 func iselSoftFixOut(c *cursor, vr *vregs, in *ir.Inst, sym string) error {
 	op := in.Op()
 	src, ok := vr.lookup(in.Arg(0))

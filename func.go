@@ -73,69 +73,16 @@ var (
 	SExt    = ParamAttr{kind: paSExt}
 	NoAlias = ParamAttr{kind: paNoAlias}
 
-	// SwiftSelf marks the parameter that travels in the self register
-	// rather than in the argument sequence.
-	//
-	// It is a convention rather than a hint: a caller that puts the value
-	// in an argument register instead passes it where the callee does not
-	// look, and the callee reads whatever was in the self register. That
-	// compiles and links and answers, which is why this exists — the two
-	// sides have to agree, and the only way to agree is to say so in the
-	// signature. AAPCS64 has no such register; this is Swift's, and on
-	// AArch64 it is X20.
+	// SwiftSelf marks the parameter passed in the Swift self register (X20 on AArch64, R13 on x86-64).
 	SwiftSelf = ParamAttr{kind: paSwiftSelf}
 
-	// SwiftError marks the result that travels in the error register
-	// rather than in the return sequence.
-	//
-	// It is how Swift says a call failed: the caller clears the
-	// register before the call, the callee writes to it on the path
-	// that fails, and the caller reads it afterwards -- swiftc's own
-	// code does exactly that, `mov x21, #0` before the branch and
-	// `cbnz x21` after it. A function that returns normally leaves it
-	// as it found it.
-	//
-	// On a result rather than a parameter, because that is what it
-	// is: the value travels out. The register is cleared for the call
-	// whether or not anything reads what comes back, since the callee
-	// only writes it when it fails and the caller has no other way to
-	// tell the two apart.
+	// SwiftError marks the result returned in the Swift error register (X21 on AArch64, R12 on x86-64).
 	SwiftError = ParamAttr{kind: paSwiftError}
 
-	// SwiftIndirectResult marks the parameter carrying the address of
-	// the storage a caller set aside for a result that is returned
-	// indirectly by convention rather than by size.
-	//
-	// It is SRet's answer without SRet's question. AAPCS64 decides
-	// indirection from the aggregate: a two-eightbyte result comes
-	// back in X0 and X1, so a caller supplies no address at all, and
-	// SRet says so by naming the type and letting §6.9 re-derive it.
-	// Swift decides it from the declaration instead. A generic
-	// function returns `@out T` through the indirect result register
-	// whatever T is, because the caller is the only one who knows how
-	// big T became -- Array's subscript getter hands an Int32 back
-	// through a four-byte slot in X8, which no size rule would ask
-	// for.
-	//
-	// So this is a statement and not a hint, the way SwiftSelf is: the
-	// register is X8 because the declaration says so.
+	// SwiftIndirectResult marks the parameter carrying the address for an indirect result by convention (X8 on AArch64, RAX/RCX on x86-64).
 	SwiftIndirectResult = ParamAttr{kind: paSwiftOut}
 
-	// SwiftAsync marks the parameter carrying an async function's
-	// context: the frame holding everything that has to survive a
-	// suspension, and the chain back to the caller's.
-	//
-	// Swift's async functions do not keep their state on the stack,
-	// because a suspended one has no stack -- it has given its thread
-	// back. What it has instead is this pointer, and a frame reached
-	// through it that the task's allocator owns. So the register is
-	// the one thing every piece of a split function is handed, and it
-	// is the first thing each of them reads.
-	//
-	// The same statement SwiftSelf is, for the same reason: AAPCS64 has
-	// no such register, the two sides have to agree, and the only way
-	// to agree is to say so in the signature. On AArch64 it is X22,
-	// which is what swiftc emits.
+	// SwiftAsync marks the parameter carrying the async function context (X22 on AArch64, R14 on x86-64).
 	SwiftAsync = ParamAttr{kind: paSwiftAsync}
 )
 

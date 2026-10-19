@@ -1,27 +1,9 @@
 package amd64
 
-// What a gated verb becomes on a processor without its instruction.
-//
-// popcnt, clz and ctz carry CPUID bits (POPCNT, LZCNT, BMI1), and so do the
-// rounding verbs (SSE4.1's ROUNDSS/ROUNDSD) and fma (FMA3). The baseline
-// processor -- x86-64 as AMD first shipped it, and what an unqualified
-// x86_64 target means to every toolchain -- has none of them. A frontend
-// writes these verbs whatever the processor, because the language defines
-// them whatever the processor: Swift's leadingZeroBitCount and rounded(.towardZero)
-// are there on every machine. So the lowering is the processor's question
-// and not the frontend's, and the answer on a processor without the
-// instruction is the one LLVM gives:
-//
-//   - clz and ctz are BSR and BSF, which every AMD64 processor has, with a
-//     conditional move for zero -- the one input where BSR and BSF leave
-//     their destination undefined and LZCNT and TZCNT answer the width.
-//   - popcnt is the SWAR sum: bits counted in pairs, nibbles, bytes, and the
-//     bytes summed by one multiply.
-//   - The rounding verbs and fma are calls to the C library's ceil, floor,
-//     trunc, nearbyint and fma, which is what they are defined to be.
-//
-// gatedVerbs says which feature makes the instruction available; nothing is
-// refused for the lack of one.
+// Fallback expansions for gated instructions on baseline x86-64 processors:
+//   - clz / ctz: lowered via BSR / BSF with a conditional move for zero.
+//   - popcnt: parallel bit-manipulation / SWAR summation sequence.
+//   - rounding verbs & fma: lowered to C runtime libcalls (ceil, floor, trunc, nearbyint, fma).
 
 import (
 	"fmt"

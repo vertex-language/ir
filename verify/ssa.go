@@ -2,25 +2,7 @@ package verify
 
 import "github.com/vertex-language/ir"
 
-// §19.1 (single assignment and dominance), §19.2 (terminators and
-// reachability), and §19.17 (the entry block is nobody's target).
-//
-// §19.3 — a branch's arguments against its target's parameters — is not
-// here. It is a deferred check on the builder, run by ir.Module.Err,
-// because a forward branch may name a block whose parameter list is not
-// declared yet, and Module has already returned it by the time any of
-// this runs.
-
-// terminators is §19.2's first half: every block ends in exactly one
-// terminator. It reports whether the function's CFG is worth reading
-// further — see checker.function for why a missing terminator stops the
-// function rather than degrading the rules after it.
-//
-// "Exactly one" is only ever checked in the one direction. Two
-// terminators in a block is not a shape the builder can produce: it
-// refuses any instruction emitted into an already-terminated block with
-// ir.ErrTerminated, which is sticky, which Module returned before this
-// ran.
+// terminators checks §19.2: every block must end in exactly one terminator.
 func (c *checker) terminators(blocks []*ir.Block) bool {
 	ok := true
 	for _, b := range blocks {
@@ -36,17 +18,8 @@ func (c *checker) terminators(blocks []*ir.Block) bool {
 	return ok
 }
 
-// reachability is §19.2's second half and §19.17: every block but the
-// entry block is reached by some path from it, and the entry block is
-// reached by no edge at all.
-//
-// The two are one walk because they are the same question asked at both
-// ends of the graph. A block with no predecessors is dead code the
-// builder was still willing to emit — no rule of §19 makes it
-// unconstructible, only unsound. The entry block with a predecessor is
-// the mirror image: its inputs are the signature's parameter registers,
-// so an edge into it would have to supply parameters that no branch
-// argument list can name.
+// reachability checks §19.2 and §19.17: all non-entry blocks must be reachable from entry,
+// and the entry block must have no predecessors.
 func (c *checker) reachability(f *ir.Func, blocks []*ir.Block) {
 	entry := entryBlock(blocks)
 	reached := make(map[*ir.Block]bool, len(blocks))

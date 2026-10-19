@@ -1,15 +1,7 @@
 package ir
 
-// Legalizing f16 and bf16 into i32.
-//
-// The half-float namespaces are admitted on every stock target, and most
-// of those targets have no half-precision arithmetic to lower them to.
-// This pass runs before instruction selection, as LegalizeI128 does, and
-// takes both types out of the module: every half value becomes an i32
-// whose low sixteen bits are its encoding and whose high sixteen are
-// zero, and every half instruction becomes the i32 and f32 instructions
-// that compute the same bits. What reaches a backend afterwards is a
-// module in the reg-types it already had.
+// LegalizeHalf lowers f16 and bf16 values into i32 carriers for targets without
+// native half-precision support, representing each half value in the lower 16 bits of an i32.
 //
 // The arithmetic is done in f32 and rounded back, which is exact: f32's
 // 24 bits of significand are at least twice either half format's plus

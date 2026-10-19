@@ -1,70 +1,14 @@
 // Package i386 lowers VIR to a finished, immutable *i386/obj.Object.
 //
-// The third architecture in this tree and the first that is not 64-bit, which
-// is the only thing about it that is genuinely hard.
+// # Key Design Details
 //
-// # What differs from the other two backends, and why
-//
-// An i64 does not fit in a register. Every other backend here maps one
-// ir.Def to one vreg; this one maps an i64 to two, a low half and a high
-// half, and every 64-bit verb becomes a pair of instructions over them —
-// ADD then ADC, SUB then SBB, and the shifts through SHLD and SHRD. That
-// choice is what the rest of the package is arranged around: `value` is a
-// pair rather than a register, and isel asks for halves rather than
-// operands.
-//
-// The pair is safe against the register allocator for a reason worth
-// stating: ADC reads the carry ADD left, and the only instructions the
-// allocator inserts are spills and reloads, which are MOVs — and a MOV on
-// x86 does not touch the flags. On an architecture whose moves did, this
-// would need the two halves welded into one MIR instruction.
-//
-// Every argument is on the stack. There is no register argument in the
-// Intel386 psABI, so the outgoing area is the whole story of a call and
-// classification is arithmetic rather than a two-file walk. A 64-bit
-// argument is two slots; the return comes back in EAX, or EDX:EAX.
-//
-// Six allocatable registers. ESP and EBP are spoken for, which leaves EAX,
-// ECX, EDX, EBX, ESI and EDI — and an i64 occupies two of the six. Spilling
-// is the normal case here rather than the exceptional one.
-//
-// Floats in SSE2, returned through x87. The psABI's float unit is x87, whose
-// registers are a stack that nothing in this tree's register allocator can
-// model, so every float value here lives in an XMM register instead — eight
-// flat registers that allocate like any other file. The price is a baseline
-// that is no longer a 386, SSE2 having arrived with the Pentium 4, and one
-// place where x87 survives anyway: the psABI returns a float in ST(0), so a
-// return is a store and an FLD and taking a result back is an FSTP. See
-// isel_float.go.
-//
-// Half of §C2 is a call. SSE2 converts between a float and a *32-bit*
-// integer and nothing wider — the 64-bit forms are REX.W, which is x86-64 —
-// so every conversion with a 64-bit end is a compiler-rt helper, and the
-// unsigned 32-bit ones are the signed instruction with a bias around it.
-// The four rounding verbs and fma are libm's for the same kind of reason:
-// ROUNDSD is SSE4.1 and VFMADD is FMA3, and neither is in this baseline.
-// See isel_cvt.go.
-//
-// # What is still missing
-//
-// f80 and f128, which are not values here. f80 is x87's own format and the
-// register file this package does not allocate; f128 would need the
-// soft-float table the amd64 backend has and this one does not. Both are
-// refused by name, as source, destination or storage.
-//
-// Of the rest: §D3's tlsaddr and §G3's unwinding, neither of which any
-// backend in this tree implements. §G4's inline assembly is implemented —
-// see asm.go — with the one exception that a 64-bit operand is refused,
-// because it is a register pair here and one %-reference cannot name two
-// registers.
-//
-// # Verifying this
-//
-// The generated code runs, which took some arranging. There is no way to
-// execute a 32-bit x86 process on the host this was written on, so the test
-// harness links the output against a freestanding runtime into a multiboot
-// kernel and boots it under qemu-system-i386, reading the answers off the
-// emulated serial port. See run_test.go, which explains the parts.
+//   - 64-bit values (i64) are split into pairs of 32-bit registers (low:high),
+//     using paired instructions (ADD/ADC, SUB/SBB, SHLD/SHRD).
+//   - All function call arguments are passed on the stack per the Intel386 psABI;
+//     returns use EAX (or EDX:EAX for i64).
+//   - Six allocatable GPRs: EAX, ECX, EDX, EBX, ESI, EDI.
+//   - Floating-point computation uses SSE2 (XMM0..XMM7); returns pass through x87 ST(0).
+//   - Wide conversions and 64-bit divisions lower to runtime helper calls.
 package i386
 
 import (

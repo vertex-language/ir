@@ -1,19 +1,11 @@
-// Command vir is a debugging tool for the Vertex IR: it builds a named
-// sample module and shows you what this repo makes of it.
+// Command vir is a debugging tool for Vertex IR that builds and inspects sample modules.
 //
-//	vir list                every sample, with what shape it is
-//	vir cat <sample>        print it as .vir
-//	vir verify <sample>     run §19 over it and report every fault
+//	vir list            list available sample modules
+//	vir cat <sample>    print the sample module as .vir text
+//	vir verify <sample> run §19 verification on the sample module
 //
-// It is not a compiler driver, and the missing verb says why. There is no
-// `vir fmt`, because formatting means reading .vir back in and this repo
-// has no parser — deliberately: a reader would be a second front door for
-// constructing a module, with its own invariants to defend, and nothing
-// in the pipeline consumes one. So `vir` takes the name of a module it
-// builds by calling the same public API a frontend would, and .vir stays
-// what the README says it is, an output format.
-//
-// It imports nothing you cannot: ir, ir/text, and ir/verify.
+// vir generates sample modules using the public API; this repository does not include
+// a .vir parser.
 package main
 
 import (

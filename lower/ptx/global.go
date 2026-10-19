@@ -1,22 +1,14 @@
 package ptx
 
-// This backend's half of §5: the layout table, the state spaces, and how
-// bytes become a declaration. The walk itself is lower/globals, which
-// every backend shares.
+// §5 global lowering for PTX state spaces and declarations.
 //
-// PTX has no sections and no byte stream. A global is a declaration with
-// a state space, an alignment, an element type, a length and an
-// initializer, so the adapter collects the bytes the walk emits for one
-// object and turns them into a .b8 array when the object is closed. An
-// object with no non-zero byte gets no initializer at all — PTX zeroes
-// .global and .const storage by default, which is what BSS means here.
+// PTX globals are declarations with a state space, alignment, element type,
+// and initializer (rather than raw byte streams in sections). Zero-initialized
+// globals in .global and .const require no initializer.
 //
-// An address in the bytes is a relocation the walk hands over by symbol,
-// and a .b8 array cannot hold one. Such an object is emitted as a .u64
-// array instead, with generic(sym)+addend where the walk placed the
-// address — which needs every address on an 8-byte boundary and the
-// object's size a multiple of 8. A vtable is that shape; a packed struct
-// holding a pointer is not, and is refused.
+// Relocations (symbol addresses) cannot be placed in a .b8 array; objects
+// containing relocations are emitted as .u64 arrays with generic(sym)+addend,
+// requiring 8-byte aligned addresses and sizes.
 
 import (
 	"fmt"

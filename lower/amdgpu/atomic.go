@@ -1,38 +1,9 @@
 package amdgpu
 
-// §H and workgroup storage: where a pointer points decides the
-// instruction, and the scope decides the cache bits around it.
-//
-// # Where a pointer points
-//
-// Every VIR pointer is a flat address, and the hardware routes a flat
-// access to LDS when the address falls in the shared aperture — so a
-// shared global's address is the aperture's high half over its LDS
-// offset, and a flat_load through it is correct. It is also slow, and
-// LDS atomics through flat are slower still, so an access whose pointer
-// provably came from a shared global — a ptr.getaddr of one, through
-// ptr.add and ptr.sub — is a ds_* instruction on the address's low
-// dword, which is the LDS offset by construction. Everything else is
-// flat.
-//
-// # Scopes
-//
-// The memory model is LLVM's for each generation, read off llc:
-//
-//   - GFX9 (gfx900, gfx908): one L2 per agent, so a release is the
-//     s_waitcnt every memory instruction already has and an acquire at
-//     device or system scope invalidates L1 (buffer_wbinvl1_vol). An
-//     atomic load at those scopes bypasses L1 (glc).
-//   - gfx90a: the same, but a system-scope release writes L2 back
-//     (buffer_wbl2) and a system-scope acquire invalidates it
-//     (buffer_invl2) before L1.
-//   - gfx940: scope bits on the access itself — sc0 for the workgroup,
-//     sc1 for the device, both for the system — and buffer_wbl2 and
-//     buffer_inv with the scope's bits for release and acquire beyond
-//     the workgroup.
-//
-// An rmw always uses the returning form (sc0 or glc), since a VIR atomic
-// has a result; on gfx940 the system scope adds sc1.
+// §H Atomic operations and workgroup storage:
+// Accesses to Local Data Share (LDS) use ds_* instructions; other pointers use flat instructions.
+// Scopes (workgroup, device, system) are mapped to generation-specific cache control
+// bits (glc/sc0/sc1, buffer_wbl2, buffer_inv) across GFX9, gfx90a, and gfx940.
 
 import (
 	"fmt"

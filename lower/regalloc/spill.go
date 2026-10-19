@@ -1,21 +1,7 @@
 package regalloc
 
-// Spilling: what to do when the interference graph needs more registers
-// than there are.
-//
-// The strategy is the simplest one that is correct, and it is called
-// "spill everywhere": a spilled value lives in memory, is stored the
-// moment it is computed, and is loaded again immediately before each
-// instruction that reads it. Every one of those loads defines a vreg
-// that dies one instruction later, which is a live range short enough to
-// colour in almost any graph — that is the whole reason it works.
-//
-// What it is not is good. A value read in a loop is reloaded on every
-// iteration, where a real allocator would keep it in a register across
-// the ones that have a spare and reload only where they do not. Doing
-// better means splitting a live range rather than replacing it, and
-// choosing where to split by how often the code there runs, which needs
-// a notion of loop depth this MIR does not carry.
+// Spilling implements "spill everywhere": spilled values are stored immediately
+// after computation and reloaded before each use.
 
 import "github.com/vertex-language/ir/lower/mir"
 

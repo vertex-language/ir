@@ -1,29 +1,14 @@
 package ir
 
-// Two cleanups that find the same value computed twice.
+// ThreadJoins bypasses intermediate join blocks that only forward a condition:
 //
-// ThreadJoins undoes the join a frontend lowers `a && b` and `a || b`
-// through. Each operand's block branches to one shared block with its
-// answer as an argument, and that block does nothing but branch on it:
-//
-//	@b5:    br @j(0)                  @b5:    br @no
-//	@c1:    ...; br @j(%21)    ==>    @c1:    ...; brif %21, @yes, @no
+//	@b5:       br @j(0)               @b5: br @no
+//	@c1:       ...; br @j(%21)  ==>   @c1: ...; brif %21, @yes, @no
 //	@j(%p i1): brif %p, @yes, @no
 //
-// Beyond the branch it saves, the join is a block with two predecessors
-// standing between the code that tests `raw[i] == 13` and the code that
-// tests `raw[i] == 10`, which hides from NumberValues that the second
-// bounds check and load are the first one's again.
-//
-// NumberValues is local value numbering over extended basic blocks: a
-// block with exactly one predecessor carries on with what that
-// predecessor knew. What it knows is every pure instruction computed so
-// far, keyed by its operation and operands; every load, until something
-// that may write memory; and every branch condition's answer on the edge
-// taken. A second computation of a known value is replaced by the first,
-// and a brif on a condition whose answer is known becomes a br. Applied to
-// a bounds-checked byte loop, the count load, the compare, the check, the
-// address and the byte load of a repeated `raw[i]` all go.
+// NumberValues implements local value numbering (LVN) over extended basic blocks.
+// Pure instructions and available loads are CSE'd within single-predecessor chains,
+// and branches with known conditions are simplified to unconditional jumps.
 
 // ThreadJoins rewrites each branch into a join that only branches on its
 // one parameter so that it branches where the join would, and reports how

@@ -1,15 +1,6 @@
 package regalloc
 
-// Linear scan over live intervals: the allocator a debug build wants.
-//
-// The graph colourer in regalloc.go builds an interference graph whose
-// size is the number of simultaneously live pairs, and rebuilds it and the
-// liveness under it every spill round. For the functions a front end
-// produces without optimising -- long straight runs, a call every few
-// instructions, each call writing thirty-nine clobbered registers -- that
-// graph is most of the compile. clang -O0 (RegAllocFast), Go and Cranelift
-// all allocate in time close to linear in the instruction count instead,
-// and so does this.
+// Linear scan register allocation over live intervals (Poletto & Sarkar, with Wimmer & Franz intervals).
 //
 // The shape is Poletto and Sarkar's, with Wimmer and Franz's intervals:
 //

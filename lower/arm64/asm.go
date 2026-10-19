@@ -14,38 +14,17 @@ import (
 	"github.com/vertex-language/ir/lower/regalloc"
 )
 
-// §G4, inline assembly.
+// §G4 inline assembly lowering:
 //
-// The template is not lowered. It is checked here, carried through register
-// allocation as an ordinary instruction with ordinary defs and uses, expanded
-// once the allocator has said where each operand went, and handed to the
-// assembler in the sibling arm64 module — the same assembler and the same ISA
-// table every other instruction in this file reaches through its typed helper.
+// Asm templates are carried through register allocation as MIR instructions
+// with defs, uses, and clobbers, then expanded with allocated registers and
+// handed to the arm64 assembler.
 //
-// What makes that work with no new machinery in mir or regalloc is that every
-// GCC constraint feature turns out to be something the allocator already does:
-//
-//   - A register class is the operand's VIR type, which vregs already
-//     classifies. An f64 is in the vector file whether its constraint letter
-//     says `w` or not.
-//   - A clobber is a vreg pinned to the clobbered register and listed among
-//     the instruction's Defs. Interference then puts an edge from it to
-//     everything live across the instruction, which is what a clobber means.
-//     usedCalleeSaved reads the same assignment map, so clobbering x19 saves
-//     x19 in the prologue without anything here saying so.
-//   - Early clobber is already the default: mir's interference gives every
-//     def an edge to every use of its own instruction unless the instruction
-//     is a copy. So `"=&r"` is correct and `"=r"` is conservative, costing a
-//     register and never correctness.
-//   - A tied operand is one vreg appearing in both Uses and Defs. The
-//     interference builder drops the self-edge, liveness already covers both
-//     roles, and the two share a register by construction rather than by a
-//     coalescing pass. The input is copied into it first, so a value that
-//     outlives the asm is not overwritten.
-//
-// The one thing genuinely absent is a fixed-register constraint, and AArch64
-// does not have one: GCC reaches a named register here through a register asm
-// variable, which is a frontend construct with no place in this IR.
+// Constraint mapping:
+//   - Register class: Derived from VIR operand type (e.g. f64 in vector file).
+//   - Clobbers: Virtual registers pinned to physical registers in Defs.
+//   - Early clobber: MIR interference defaults to defs interfering with uses.
+//   - Tied operands: A virtual register appearing in both Uses and Defs.
 
 // asmOperand is one constrained operand: the register standing for it, the
 // width it is read at, and whether the template wants it spelled as an
@@ -56,8 +35,7 @@ type asmOperand struct {
 	mem  bool
 }
 
-// iselAsm lowers §G4's asm and asm goto.
-// iselAsm lowers one asm or asm goto. outs is nil for the instruction
+// iselAsm lowers §G4 asm and asm goto. outs is nil for the instruction
 // form, whose outputs are its own results; for the terminator form it is the
 // fallthrough target's trailing parameters, which is where §14 puts them.
 func iselAsm(fn *ir.Func, c *cursor, vr *vregs, in *ir.Inst, id int, outs []mir.VReg) error {
